@@ -76,7 +76,8 @@ class DatingAccessibilityService : AccessibilityService() {
         scheduler.loadPending().forEach { scheduled.add(it.conversationId) }
         swipeLoop = SwipeLoopController(
             pacer = SwipePacer(dailyCap = settings.dailySwipeCap),
-            isEnabled = { settings.autoSwipeEnabled && !OverlayService.killSwitchEngaged },
+            // Swiping needs a vision model; without one, keep the loop idle (don't reopen the app).
+            isEnabled = { settings.autoSwipeEnabled && !OverlayService.killSwitchEngaged && groq.hasVision() },
             canSwipeNow = { isOnSwipeScreen() },
             doSwipe = { done -> swipeOnce { done() } },
             onNotReady = { if (settings.autoOpenForSwipe) openApp(settings.swipeApp) },
