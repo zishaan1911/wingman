@@ -45,6 +45,7 @@ class DatingAccessibilityService : AccessibilityService() {
     private val timing = TimingEngine()
     private lateinit var escalation: EscalationPolicy
     private lateinit var scheduler: SendScheduler
+    private lateinit var swipeLoop: SwipeLoopController
 
     private val scheduled = HashSet<String>()
     private val seenConvos = HashSet<String>()
@@ -59,12 +60,34 @@ class DatingAccessibilityService : AccessibilityService() {
         memory = MatchMemory(this)
         escalation = EscalationPolicy(settings)
         scheduler = SendScheduler { reply -> performScheduledSend(reply) }
+        swipeLoop = SwipeLoopController(
+            pacer = SwipePacer(dailyCap = settings.dailySwipeCap),
+            isEnabled = { settings.autoSwipeEnabled && !OverlayService.killSwitchEngaged },
+            canSwipeNow = { isOnSwipeScreen() },
+            doSwipe = { done -> swipeOnce { done() } },
+        )
+        swipeLoop.start()
         OverlayService.start(this)
         Log.i(TAG, "Wingman accessibility service connected")
     }
 
     override fun onInterrupt() {}
-    override fun onDestroy() { instance = null; super.onDestroy() }
+    override fun onDestroy() {
+        if (::swipeLoop.isInitialized) swipeLoop.shutdown()
+        instance = null
+        super.onDestroy()
+    }
+
+    /**
+     * Heuristic: we're on the swipe deck when a dating app is foregrounded and the screen
+     * has NO chat input box (chat screens do; the discovery deck doesn't). Good enough to
+     * avoid swiping on chat/match-list screens; refine with AppProfile deck ids if needed.
+     */
+    private fun isOnSwipeScreen(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val profile = root.packageName?.toString()?.let { AppProfile.forPackage(it) } ?: return false
+        return findInputBox(root, profile) == null
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
