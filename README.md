@@ -1,7 +1,7 @@
 # Wingman — Android screen-reading dating assistant (prototype skeleton)
 
 A personal Android app that reads your Tinder / Bumble conversations via the
-**Accessibility Service** API, drafts a reply in your voice with the Claude API,
+**Accessibility Service** API, drafts a reply in your voice with the Groq API,
 and auto-sends it at a **psychologically-chosen time** (never instant, mirrors
 their rhythm, respects their active hours, jittered so it never looks mechanical).
 
@@ -49,7 +49,7 @@ You accepted this tradeoff when you chose auto-send. Just keep it in view.
         ▼                                     │          │
 ┌───────────────┐   ┌──────────────┐   ┌─────────────┐  │
 │ConversationStore│→ │  ReplyEngine │   │SendScheduler│──┘
-│ (msgs + times)  │   │ (Claude API) │   │ (WorkManager)│
+│ (msgs + times)  │   │  (Groq API)  │   │ (WorkManager)│
 └───────┬────────┘   └──────┬───────┘   └──────▲──────┘
         │                    │ draft reply       │ fire at computed Instant
         │                    ▼                   │
@@ -66,7 +66,7 @@ You accepted this tradeoff when you chose auto-send. Just keep it in view.
 **Data flow per incoming message:**
 1. `DatingAccessibilityService` sees the chat screen change, parses the visible
    conversation into `Message`s, hands them to `ConversationStore`.
-2. When it's your turn, `ReplyEngine` asks Claude for a draft in your voice.
+2. When it's your turn, `ReplyEngine` asks Groq for a draft in your voice.
 3. `TimingEngine` computes the ideal send `Instant` from their rhythm + active hours.
 4. `SendScheduler` schedules a job for that instant. Overlay shows a countdown.
 5. At fire time, the service re-opens that chat, types the draft, taps send
@@ -80,7 +80,7 @@ You accepted this tradeoff when you chose auto-send. Just keep it in view.
 | `DatingAccessibilityService.kt` | Reads the screen, performs the send. |
 | `AppProfiles.kt` | Per-app selectors (Tinder vs Bumble). **You fill these in.** |
 | `ConversationStore.kt` | Remembers messages + timestamps per match (for mirroring/activity). |
-| `ReplyEngine.kt` | Calls the Claude API to draft a reply in your voice. |
+| `ReplyEngine.kt` | Calls the Groq API to draft a reply in your voice. |
 | `SendScheduler.kt` | Fires the send at the computed instant. |
 | `OverlayService.kt` | Floating status chip + kill-switch + hold window. |
 | `Models.kt` | `Message`, `Conversation`, `Sender`, `Persona`. |
@@ -88,10 +88,9 @@ You accepted this tradeoff when you chose auto-send. Just keep it in view.
 ## Setup
 
 1. Open the project in **Android Studio** (it's a standard Gradle/Kotlin app).
-2. Put your Claude API key somewhere off-device-ideally, but for a personal
-   prototype: set it in `local.properties` as `ANTHROPIC_API_KEY=sk-ant-...`
+2. Put your Groq API key in `local.properties` as `GROQ_API_KEY=gsk_...`
    (git-ignored) — `build.gradle.kts` wires it into `BuildConfig`. **Better:**
-   stand up a tiny personal proxy and point `ReplyEngine.ENDPOINT` at it, so the
+   stand up a tiny personal proxy and point `GroqClient.ENDPOINT` at it, so the
    key never ships inside the APK. See "Key safety" below.
 3. Build & install on your phone (`./gradlew installDebug`).
 4. On the phone: **Settings → Accessibility → Wingman → Enable**, and grant
@@ -120,7 +119,7 @@ screen-reading approach, nothing to do with this design specifically.
 Shipping an API key inside an Android APK means anyone who pulls the APK can
 extract it. For a single-user personal build on your own phone it's a pragmatic
 shortcut, but the clean pattern is a **thin personal proxy** (a tiny serverless
-function) that holds the key and forwards to Anthropic. `ReplyEngine` is written
+function) that holds the key and forwards to Groq. `GroqClient` is written
 against a pluggable endpoint precisely so you can flip to that without touching
 the rest of the app.
 
