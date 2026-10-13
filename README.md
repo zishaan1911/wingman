@@ -1,0 +1,140 @@
+# Wingman — Android screen-reading dating assistant (prototype skeleton)
+
+A personal Android app that reads your Tinder / Bumble conversations via the
+**Accessibility Service** API, drafts a reply in your voice with the Claude API,
+and auto-sends it at a **psychologically-chosen time** (never instant, mirrors
+their rhythm, respects their active hours, jittered so it never looks mechanical).
+
+> This is a working *skeleton*, not a finished app. The logic (timing engine,
+> reply engine, conversation tracking, send/read plumbing) is real and wired up.
+> The only parts you must fill in yourself are the **app-specific UI selectors**
+> (the IDs of the chat list, message box, and send button inside Tinder/Bumble) —
+> those change between app versions and can't be hardcoded reliably. See
+> `AppProfiles.kt` and "Finding selectors" below.
+
+---
+
+## ⚠️ Read this first — risk & reality
+
+- **Both Tinder and Bumble forbid automation in their ToS.** Auto-sending is the
+  highest-risk behavior. Possible consequences: shadowban (your profile silently
+  stops being shown) or a full account/device/phone-number ban, with no real appeal.
+- The **timing engine is also your best anti-detection defense**: human-like,
+  mirrored, jittered timing is exactly what *doesn't* trip bot detectors. Instant
+  or clockwork-regular replies are what get flagged. So the "psychological timing"
+  goal and the "don't get banned" goal point the same way — lean into it.
+- Keep it to **your own account**. This is an offload tool, not a spam tool.
+- Treat auto-send as something you supervise. The overlay gives you a kill-switch
+  and a "hold / edit" window before anything goes out (configurable).
+
+You accepted this tradeoff when you chose auto-send. Just keep it in view.
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Tinder / Bumble (unmodified apps on your phone)               │
+└───────────────┬──────────────────────────────────▲────────────┘
+                │ reads screen (a11y node tree)      │ performs tap/type (a11y gestures)
+                ▼                                     │
+┌──────────────────────────────────────────────────────────────┐
+│  DatingAccessibilityService                                     │
+│   • extracts the open conversation (who said what)             │
+│   • detects "their turn ended, my turn to reply"               │
+│   • executes the send when the scheduler says go               │
+└───────┬───────────────────────────────────┬──────────▲────────┘
+        │ conversation snapshot              │ "send this text now"
+        ▼                                     │          │
+┌───────────────┐   ┌──────────────┐   ┌─────────────┐  │
+│ConversationStore│→ │  ReplyEngine │   │SendScheduler│──┘
+│ (msgs + times)  │   │ (Claude API) │   │ (WorkManager)│
+└───────┬────────┘   └──────┬───────┘   └──────▲──────┘
+        │                    │ draft reply       │ fire at computed Instant
+        │                    ▼                   │
+        │            ┌────────────────┐          │
+        └───────────▶│  TimingEngine  │──────────┘
+                     │ computes WHEN  │
+                     └────────────────┘
+                              ▲
+                     ┌────────┴────────┐
+                     │  OverlayService │  status + kill-switch + hold/edit
+                     └─────────────────┘
+```
+
+**Data flow per incoming message:**
+1. `DatingAccessibilityService` sees the chat screen change, parses the visible
+   conversation into `Message`s, hands them to `ConversationStore`.
+2. When it's your turn, `ReplyEngine` asks Claude for a draft in your voice.
+3. `TimingEngine` computes the ideal send `Instant` from their rhythm + active hours.
+4. `SendScheduler` schedules a job for that instant. Overlay shows a countdown.
+5. At fire time, the service re-opens that chat, types the draft, taps send
+   (unless you held/killed it).
+
+## File map
+
+| File | Role |
+|---|---|
+| `TimingEngine.kt` | **The core you care about** — computes *when* to send. |
+| `DatingAccessibilityService.kt` | Reads the screen, performs the send. |
+| `AppProfiles.kt` | Per-app selectors (Tinder vs Bumble). **You fill these in.** |
+| `ConversationStore.kt` | Remembers messages + timestamps per match (for mirroring/activity). |
+| `ReplyEngine.kt` | Calls the Claude API to draft a reply in your voice. |
+| `SendScheduler.kt` | Fires the send at the computed instant. |
+| `OverlayService.kt` | Floating status chip + kill-switch + hold window. |
+| `Models.kt` | `Message`, `Conversation`, `Sender`, `Persona`. |
+
+## Setup
+
+1. Open the project in **Android Studio** (it's a standard Gradle/Kotlin app).
+2. Put your Claude API key somewhere off-device-ideally, but for a personal
+   prototype: set it in `local.properties` as `ANTHROPIC_API_KEY=sk-ant-...`
+   (git-ignored) — `build.gradle.kts` wires it into `BuildConfig`. **Better:**
+   stand up a tiny personal proxy and point `ReplyEngine.ENDPOINT` at it, so the
+   key never ships inside the APK. See "Key safety" below.
+3. Build & install on your phone (`./gradlew installDebug`).
+4. On the phone: **Settings → Accessibility → Wingman → Enable**, and grant
+   **"Display over other apps"** (overlay).
+5. Fill in selectors in `AppProfiles.kt` (see below), reinstall.
+6. Configure your `Persona` (bio, voice, boundaries) in `Models.kt` / settings.
+
+## Finding selectors (the one manual step)
+
+Tinder/Bumble don't expose stable resource IDs, and they change across versions,
+so the skeleton ships with `TODO` placeholders. To discover the real ones:
+
+- In Android Studio: **Tools → Layout Inspector**, or the standalone
+  `uiautomatorviewer` (in the SDK's `tools/bin`), while the chat screen is open.
+- Or dump the live tree from the service itself: the skeleton has a
+  `dumpNodeTree()` helper you can call to log the current screen's nodes
+  (`viewIdResourceName`, `className`, `text`) to Logcat. Open a Tinder chat,
+  trigger the dump, and read off the message-row / input-box / send-button IDs.
+- Put them in `AppProfiles.TINDER` / `AppProfiles.BUMBLE`.
+
+Expect to re-check these after app updates — this is the brittle part of any
+screen-reading approach, nothing to do with this design specifically.
+
+## Key safety
+
+Shipping an API key inside an Android APK means anyone who pulls the APK can
+extract it. For a single-user personal build on your own phone it's a pragmatic
+shortcut, but the clean pattern is a **thin personal proxy** (a tiny serverless
+function) that holds the key and forwards to Anthropic. `ReplyEngine` is written
+against a pluggable endpoint precisely so you can flip to that without touching
+the rest of the app.
+
+---
+
+## LLM: Groq, end to end
+
+One Groq key powers both jobs (`GroqClient.kt`):
+- **Messaging** → `TEXT_MODEL` (default `llama-3.3-70b-versatile`) — fast + cheap,
+  plenty for short chat replies.
+- **Swiping** → `VISION_MODEL` (default `meta-llama/llama-4-scout-17b-16e-instruct`)
+  — must be a multimodal model that accepts images.
+
+Model IDs drift on Groq's side — verify the current IDs in the Groq console and
+update the two constants in `GroqClient.kt` if needed. The client talks to Groq's
+OpenAI-compatible Chat Completions endpoint, so swapping models or even providers
+later is a one-line change.

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wingman</string>
+    <string name="accessibility_description">Reads your open dating-app chats to draft and send replies on your behalf, and evaluates profiles for swiping. Operates only on Tinder and Bumble. You can pause it any time from the floating control.</string>
+</resources>
