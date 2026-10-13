@@ -39,6 +39,7 @@ class DatingAccessibilityService : AccessibilityService() {
     private lateinit var learning: LearningStore
     private lateinit var memory: MatchMemory
     private lateinit var notifier: Notifier
+    private lateinit var selectors: SelectorStore
     private val decay = DecayDetector()
 
     private val groq by lazy { GroqClient(BuildConfigKey.GROQ_API_KEY) }
@@ -68,6 +69,7 @@ class DatingAccessibilityService : AccessibilityService() {
         learning = LearningStore(this)
         memory = MatchMemory(this)
         notifier = Notifier(this)
+        selectors = SelectorStore(this)
         escalation = EscalationPolicy(settings)
         scheduler = SendScheduler(this) { reply -> performScheduledSend(reply) }
         // Re-arm any sends that were pending when we were last killed.
@@ -121,7 +123,7 @@ class DatingAccessibilityService : AccessibilityService() {
         if (findInputBox(root, profile) == null) return
         if (!settings.autoReplyEnabled) return
 
-        val matchName = profile.matchNameId?.let { findById(root, it)?.text?.toString() } ?: "match"
+        val matchName = resolveMatchName(root, profile) ?: "match"
         val convoId = "${profile.app}:$matchName"
         val messages = parseConversation(root, profile)
 
@@ -252,6 +254,10 @@ class DatingAccessibilityService : AccessibilityService() {
     }
 
     private fun parseConversation(root: AccessibilityNodeInfo, profile: AppProfile): List<Message> {
+        // No message IDs configured → auto-detect bubbles heuristically (left=them, right=you).
+        if (profile.messageRowId == null && profile.incomingTextId == null && profile.outgoingTextId == null) {
+            return AutoUi.messages(root, findInputBox(root, profile))
+        }
         val out = ArrayList<Message>()
         val screenWidth = Rect().also { root.getBoundsInScreen(it) }.width().coerceAtLeast(1)
         fun visit(node: AccessibilityNodeInfo?) {
@@ -317,9 +323,9 @@ class DatingAccessibilityService : AccessibilityService() {
 
         if (settings.humanTyping) typeHumanlike(profile, reply.text) else setTextOn(input, reply.text)
         val freshRoot = rootInActiveWindow ?: root
-        val sendBtn = profile.sendButtonId?.let { findById(freshRoot, it) }
+        val sendBtn = resolveSendButton(freshRoot, findInputBox(freshRoot, profile), profile)
         if (sendBtn != null) sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-        else Log.w(TAG, "no send button id; set sendButtonId in AppProfile")
+        else Log.w(TAG, "send button not found (auto-detect failed)")
 
         if (reply.isOpener) learning.record(OutcomeKind.OPENER_SENT, reply.tone)
         learning.record(OutcomeKind.REPLY_SENT, reply.tone)
@@ -486,8 +492,32 @@ class DatingAccessibilityService : AccessibilityService() {
 
     /** The conversation id of the chat currently on screen, or null if it can't be determined. */
     private fun currentConvoId(root: AccessibilityNodeInfo, profile: AppProfile): String? {
-        val name = profile.matchNameId?.let { findById(root, it)?.text?.toString() } ?: return null
+        val name = resolveMatchName(root, profile) ?: return null
         return "${profile.app}:$name"
+    }
+
+    /** Match-name header: configured id → cached auto-captured id → heuristic (and capture it). */
+    private fun resolveMatchName(root: AccessibilityNodeInfo, profile: AppProfile): String? {
+        profile.matchNameId?.let { return findById(root, it)?.text?.toString() }
+        selectors.get(profile.app, "matchName")?.let { id ->
+            findById(root, id)?.text?.toString()?.let { return it }
+        }
+        val node = AutoUi.matchNameNode(root) ?: return null
+        selectors.put(profile.app, "matchName", node.viewIdResourceName)
+        return node.text?.toString()
+    }
+
+    /** Send button: configured id → cached auto-captured id → heuristic (and capture it). */
+    private fun resolveSendButton(
+        root: AccessibilityNodeInfo,
+        input: AccessibilityNodeInfo?,
+        profile: AppProfile,
+    ): AccessibilityNodeInfo? {
+        profile.sendButtonId?.let { findById(root, it)?.let { b -> return b } }
+        selectors.get(profile.app, "send")?.let { id -> findById(root, id)?.let { return it } }
+        val node = AutoUi.sendButton(root, input) ?: return null
+        selectors.put(profile.app, "send", node.viewIdResourceName)
+        return node
     }
 
     private fun appOf(convoId: String): App? =

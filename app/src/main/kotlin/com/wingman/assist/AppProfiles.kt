@@ -1,19 +1,13 @@
 package com.wingman.assist
 
 /**
- * Per-app UI selectors. These are the ONLY brittle, app-version-specific values in
- * the project. Tinder/Bumble don't ship stable, documented resource IDs, so you must
- * discover them on your device and keep them current across app updates.
+ * Per-app config. The resource-ID fields are now OPTIONAL OVERRIDES — at runtime the app
+ * auto-detects the chat UI (see AutoUi.kt) and caches what it finds (SelectorStore), so you
+ * normally leave these null. Set one only if auto-detection gets something wrong on your app
+ * version; use DatingAccessibilityService.dumpNodeTree() to discover the correct id.
  *
- * HOW TO FIND THEM:
- *   • Enable the service, open a chat, and call DatingAccessibilityService.dumpNodeTree()
- *     (wire it to a debug button or trigger) to log every node's viewIdResourceName /
- *     className / text to Logcat.
- *   • Or use Android Studio's Layout Inspector / uiautomatorviewer on the live screen.
- *
- * Any field left null falls back to heuristic matching in the service (e.g. "the
- * EditText near the bottom" for the message box), which is less reliable but works
- * as a starting point.
+ * The one thing that MUST be correct is [packageName] (and the matching list in
+ * accessibility_service_config.xml) — those are stable and identify the app.
  */
 data class AppProfile(
     val packageName: String,

@@ -95,24 +95,27 @@ You accepted this tradeoff when you chose auto-send. Just keep it in view.
 3. Build & install on your phone (`./gradlew installDebug`).
 4. On the phone: **Settings → Accessibility → Wingman → Enable**, and grant
    **"Display over other apps"** (overlay).
-5. Fill in selectors in `AppProfiles.kt` (see below), reinstall.
-6. Configure your `Persona` (bio, voice, boundaries) in `Models.kt` / settings.
+5. Configure your `Persona` and `My type` in the dev panel.
 
-## Finding selectors (the one manual step)
+## UI detection is automatic
 
-Tinder/Bumble don't expose stable resource IDs, and they change across versions,
-so the skeleton ships with `TODO` placeholders. To discover the real ones:
+You do **not** need to hand-fill resource IDs any more. At runtime the app auto-detects
+the chat UI from the live accessibility tree (`AutoUi.kt`):
 
-- In Android Studio: **Tools → Layout Inspector**, or the standalone
-  `uiautomatorviewer` (in the SDK's `tools/bin`), while the chat screen is open.
-- Or dump the live tree from the service itself: the skeleton has a
-  `dumpNodeTree()` helper you can call to log the current screen's nodes
-  (`viewIdResourceName`, `className`, `text`) to Logcat. Open a Tinder chat,
-  trigger the dump, and read off the message-row / input-box / send-button IDs.
-- Put them in `AppProfiles.TINDER` / `AppProfiles.BUMBLE`.
+- **Messages** — text bubbles between the header and the input box; left = them, right = you.
+- **Input box** — the first editable field.
+- **Send button** — a clickable labelled "send", or the clickable just right of the input.
+- **Match name** — the top-bar title (used to verify the right chat before a send).
 
-Expect to re-check these after app updates — this is the brittle part of any
-screen-reading approach, nothing to do with this design specifically.
+Whatever resource IDs it discovers are **cached** per app (`SelectorStore`), so detection is
+fast and stable after the first screen, and re-captured automatically if an app update
+changes them. The fields in `AppProfiles.kt` are now optional **overrides** — set one only
+if auto-detection gets something wrong on your app version (the `dumpNodeTree()` helper is
+still there for that). The one thing that must be right is each app's **package name** in
+`AppProfiles.kt` + `accessibility_service_config.xml` (stable: `com.tinder`, `com.bumble.app`).
+
+Auto-detection is best-effort heuristics — robust for the common layouts, but if a specific
+app version trips it up, the override path is your fallback.
 
 ## Key safety
 
