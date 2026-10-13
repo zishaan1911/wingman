@@ -25,11 +25,14 @@ class GroqClient(private val apiKey: String) {
     companion object {
         const val ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 
-        // Fast + cheap, plenty for short chat replies.
-        const val TEXT_MODEL = "llama-3.3-70b-versatile"
+        // Text model for messaging/strategy. Must be one your Groq account can access
+        // (check https://console.groq.com/ → Models). gpt-oss-120b is a solid default.
+        const val TEXT_MODEL = "openai/gpt-oss-120b"
 
-        // Must be multimodal (accepts images) for swipe evaluation.
-        const val VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+        // Vision model for swiping / photo audit / photo-based openers. Leave BLANK if your
+        // account has no image-capable model — those features then disable gracefully. Set it
+        // to a multimodal model id (e.g. a llama-4 vision model) once you have access.
+        const val VISION_MODEL = ""
 
         private val JSON = "application/json; charset=utf-8".toMediaType()
     }
@@ -38,6 +41,9 @@ class GroqClient(private val apiKey: String) {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
         .build()
+
+    /** True if a vision model is configured (image features can run). */
+    fun hasVision(): Boolean = VISION_MODEL.isNotBlank()
 
     /** Plain text completion. Returns the assistant message content. */
     fun complete(
@@ -83,13 +89,15 @@ class GroqClient(private val apiKey: String) {
     }
 
     private fun call(model: String, messages: JSONArray, temperature: Double, maxTokens: Int): String {
-        val body = JSONObject()
+        val payload = JSONObject()
             .put("model", model)
             .put("messages", messages)
             .put("temperature", temperature)
             .put("max_tokens", maxTokens)
-            .toString()
-            .toRequestBody(JSON)
+        // gpt-oss models reason before answering; keep it minimal so the short answer isn't
+        // starved of tokens (reasoning counts toward max_tokens).
+        if (model.contains("gpt-oss")) payload.put("reasoning_effort", "low")
+        val body = payload.toString().toRequestBody(JSON)
 
         val req = Request.Builder()
             .url(ENDPOINT)

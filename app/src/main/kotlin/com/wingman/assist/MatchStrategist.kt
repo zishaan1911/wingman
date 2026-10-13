@@ -53,7 +53,7 @@ class MatchStrategist(private val groq: GroqClient) {
         val user = "Match: ${conversation.matchName}\nMessages exchanged: ${conversation.depth}\n\n$transcript"
 
         return try {
-            val raw = groq.complete(system, user, temperature = 0.2, maxTokens = 160)
+            val raw = groq.complete(system, user, temperature = 0.2, maxTokens = 400)
             parse(raw)
         } catch (e: Exception) {
             Log.e("Wingman", "strategist failed", e)

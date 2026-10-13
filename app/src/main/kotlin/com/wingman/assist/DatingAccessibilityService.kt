@@ -218,9 +218,12 @@ class DatingAccessibilityService : AccessibilityService() {
         work.submit {
             try {
                 val persona = settings.persona()
-                val shots = captureProfile(settings.profilePanels)
-                val text = if (shots.isNotEmpty()) openerEngine.fromProfile(shots, matchName, persona)
-                else openerEngine.fromNameOnly(matchName, persona)
+                // Vision opener if we have an image model; otherwise a text-only opener (no profile capture).
+                val text = if (groq.hasVision()) {
+                    val shots = captureProfile(settings.profilePanels)
+                    if (shots.isNotEmpty()) openerEngine.fromProfile(shots, matchName, persona)
+                    else openerEngine.fromNameOnly(matchName, persona)
+                } else openerEngine.fromNameOnly(matchName, persona)
                 // No history yet: a prompt-but-not-instant opener, shifted into active hours.
                 val convo = store.get(convoId) ?: Conversation(convoId, profile.app, matchName)
                 val sendAt = timing.computeSendTime(convo, persona, Pace.WARM_PROMPT)
@@ -348,6 +351,7 @@ class DatingAccessibilityService : AccessibilityService() {
 
     fun swipeOnce(onDone: (SwipeDecision?) -> Unit) {
         if (OverlayService.killSwitchEngaged || !settings.autoSwipeEnabled) { onDone(null); return }
+        if (!groq.hasVision()) { onDone(null); return }   // no image model → can't evaluate profiles
         work.submit {
             try {
                 // Judge the VISIBLE card only — don't open/scroll into the profile while swiping.
@@ -363,6 +367,10 @@ class DatingAccessibilityService : AccessibilityService() {
 
     /** Audit your profile photos (open your profile first). Captures multiple panels. */
     fun requestPhotoAudit(onResult: (PhotoAuditor.Audit) -> Unit) {
+        if (!groq.hasVision()) {
+            onResult(PhotoAuditor.Audit(emptyList(), emptyList(), "No vision model on your Groq account — photo audit needs one."))
+            return
+        }
         work.submit {
             val shots = captureProfile(settings.profilePanels)
             val a = if (shots.isEmpty()) PhotoAuditor.Audit(emptyList(), emptyList(), "no screenshot")

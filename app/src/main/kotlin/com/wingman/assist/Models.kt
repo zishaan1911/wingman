@@ -2,6 +2,17 @@ package com.wingman.assist
 
 import java.time.Instant
 
+/**
+ * Strip em/en dashes from a generated message. Real people don't text with them, and they're
+ * a classic AI tell. Em dash becomes a comma, en dash a hyphen; punctuation/spacing tidied.
+ */
+fun String.deDash(): String = this
+    .replace('—', ',').replace('–', '-')
+    .replace(Regex("\\s*,\\s*"), ", ")
+    .replace(Regex(",{2,}"), ",")
+    .replace(Regex("\\s{2,}"), " ")
+    .trim().trim(',').trim()
+
 /** Which app a conversation/profile belongs to. */
 enum class App { TINDER, BUMBLE }
 
