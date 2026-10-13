@@ -22,6 +22,7 @@ class ReplyEngine(private val groq: GroqClient) {
             appendLine()
             appendLine("THIS MATCH — adapt to them:")
             appendLine(toneGuidance(strategy.tone))
+            appendLine(flirtGuidance(strategy.flirt))
             appendLine("(strategist note: ${strategy.rationale})")
             if (memory.isNotEmpty()) {
                 appendLine()
@@ -54,6 +55,13 @@ class ReplyEngine(private val groq: GroqClient) {
         Tone.PLAYFUL  -> "- Tone: PLAYFUL. Light teasing, banter, callbacks to earlier jokes. Keep it fun, not try-hard."
         Tone.SCARCITY -> "- Tone: SCARCITY. Confident and a touch unhurried; don't over-explain or over-pursue. Let them invest."
         Tone.WARM     -> "- Tone: WARM. They're clearly keen — match it. Be openly interested and enthusiastic."
+    }
+
+    private fun flirtGuidance(flirt: Flirt): String = when (flirt) {
+        Flirt.CLEAN      -> "- Flirtation: CLEAN. Friendly and warm, no romantic or sexual charge."
+        Flirt.FLIRTY     -> "- Flirtation: FLIRTY. Playful, a little charming, light romantic interest. Keep it classy."
+        Flirt.SUGGESTIVE -> "- Flirtation: SUGGESTIVE. Clearly flirtatious with light innuendo, but tasteful — " +
+            "never graphic or explicit. If they push it further than this, keep your reply suggestive, not explicit."
     }
 
     private fun escalationGuidance(action: EscalationAction): String? = when (action) {

@@ -13,6 +13,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Bridge between the dating apps and the brains.
@@ -28,8 +29,10 @@ import java.util.concurrent.Executors
  */
 class DatingAccessibilityService : AccessibilityService() {
 
-    private val store = ConversationStore()
+    private lateinit var store: ConversationStore
     private val work = Executors.newSingleThreadExecutor()
+    /** Separate pool for screenshot callbacks so [captureJpegBlocking] can block `work` safely. */
+    private val shotExec = Executors.newCachedThreadPool()
 
     private lateinit var settings: Settings
     private lateinit var learning: LearningStore
@@ -56,10 +59,13 @@ class DatingAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         settings = Settings(this)
+        store = ConversationStore(this)
         learning = LearningStore(this)
         memory = MatchMemory(this)
         escalation = EscalationPolicy(settings)
-        scheduler = SendScheduler { reply -> performScheduledSend(reply) }
+        scheduler = SendScheduler(this) { reply -> performScheduledSend(reply) }
+        // Re-arm any sends that were pending when we were last killed.
+        scheduler.loadPending().forEach { scheduled.add(it.conversationId) }
         swipeLoop = SwipeLoopController(
             pacer = SwipePacer(dailyCap = settings.dailySwipeCap),
             isEnabled = { settings.autoSwipeEnabled && !OverlayService.killSwitchEngaged },
@@ -74,6 +80,8 @@ class DatingAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
     override fun onDestroy() {
         if (::swipeLoop.isInitialized) swipeLoop.shutdown()
+        if (::store.isInitialized) store.flush()
+        work.shutdownNow(); shotExec.shutdownNow()
         instance = null
         super.onDestroy()
     }
@@ -158,7 +166,14 @@ class DatingAccessibilityService : AccessibilityService() {
 
             // 4. learning loop may nudge the tone toward what's earning you replies
             val tone = if (settings.banditEnabled) learning.chooseTone(strategy.tone) else strategy.tone
-            val effStrategy = strategy.copy(tone = tone)
+
+            // 4b. flirtation: adult-only clamp (hard), then your dev-panel ceiling
+            val effFlirt = when {
+                strategy.possibleMinor -> Flirt.CLEAN                          // non-negotiable
+                else -> minOf(strategy.flirt, settings.flirtCeiling)           // enums compare by ordinal
+            }
+            val effExplicit = strategy.explicit && !strategy.possibleMinor
+            val effStrategy = strategy.copy(tone = tone, flirt = effFlirt, explicit = effExplicit)
 
             // 5. big move?
             val move = escalation.decide(convo, effStrategy)
@@ -169,8 +184,8 @@ class DatingAccessibilityService : AccessibilityService() {
             // 7. when
             val sendAt = timing.computeSendTime(convo, persona, effStrategy.pace)
 
-            // 8. autonomy gate
-            val needsApproval = when (settings.autonomy) {
+            // 8. autonomy gate — explicit ALWAYS routes to you, regardless of autonomy mode
+            val needsApproval = effExplicit || when (settings.autonomy) {
                 AutonomyMode.SUPERVISED -> true
                 AutonomyMode.APPROVE_BIG_MOVES -> escalation.isBigMove(move)
                 AutonomyMode.FULL_AUTO -> false
@@ -183,20 +198,19 @@ class DatingAccessibilityService : AccessibilityService() {
     }
 
     private fun scheduleOpener(convoId: String, matchName: String, profile: AppProfile) {
-        captureScreenJpeg { shot ->
-            work.submit {
-                try {
-                    val persona = settings.persona()
-                    val text = if (shot != null) openerEngine.fromProfile(shot, matchName, persona)
-                    else openerEngine.fromNameOnly(matchName, persona)
-                    // No history yet: a prompt-but-not-instant opener, shifted into active hours.
-                    val convo = store.get(convoId) ?: Conversation(convoId, profile.app, matchName)
-                    val sendAt = timing.computeSendTime(convo, persona, Pace.WARM_PROMPT)
-                    val needsApproval = settings.autonomy == AutonomyMode.SUPERVISED
-                    val reply = ScheduledReply(convoId, matchName, text, sendAt, EscalationAction.NONE, needsApproval, Tone.GENUINE, isOpener = true)
-                    dispatch(reply)
-                } catch (e: Exception) { Log.e(TAG, "opener failed", e); scheduled.remove(convoId) }
-            }
+        work.submit {
+            try {
+                val persona = settings.persona()
+                val shots = captureProfile(settings.profilePanels)
+                val text = if (shots.isNotEmpty()) openerEngine.fromProfile(shots, matchName, persona)
+                else openerEngine.fromNameOnly(matchName, persona)
+                // No history yet: a prompt-but-not-instant opener, shifted into active hours.
+                val convo = store.get(convoId) ?: Conversation(convoId, profile.app, matchName)
+                val sendAt = timing.computeSendTime(convo, persona, Pace.WARM_PROMPT)
+                val needsApproval = settings.autonomy == AutonomyMode.SUPERVISED
+                val reply = ScheduledReply(convoId, matchName, text, sendAt, EscalationAction.NONE, needsApproval, Tone.GENUINE, isOpener = true)
+                dispatch(reply)
+            } catch (e: Exception) { Log.e(TAG, "opener failed", e); scheduled.remove(convoId) }
         }
     }
 
@@ -254,11 +268,11 @@ class DatingAccessibilityService : AccessibilityService() {
         }
         val input = findInputBox(root, profile) ?: run { scheduled.remove(reply.conversationId); return }
 
-        val args = Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, reply.text)
-        }
-        input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-        val sendBtn = profile.sendButtonId?.let { findById(root, it) }
+        if (settings.humanTyping) typeHumanlike(profile, reply.text) else setTextOn(input, reply.text)
+
+        // re-resolve the send button against the current tree (it may have changed after typing)
+        val freshRoot = rootInActiveWindow ?: root
+        val sendBtn = profile.sendButtonId?.let { findById(freshRoot, it) }
         if (sendBtn != null) sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         else Log.w(TAG, "no send button id; set sendButtonId in AppProfile")
 
@@ -283,28 +297,26 @@ class DatingAccessibilityService : AccessibilityService() {
 
     fun swipeOnce(onDone: (SwipeDecision?) -> Unit) {
         if (OverlayService.killSwitchEngaged || !settings.autoSwipeEnabled) { onDone(null); return }
-        captureScreenJpeg { shot ->
-            if (shot == null) { onDone(null); return@captureScreenJpeg }
-            work.submit {
-                try {
-                    val decision = swipeEngine.evaluate(listOf(shot), settings.swipePrefs())
-                    if (decision.confidence >= 0.35) { if (decision.like) swipeRight() else swipeLeft() }
-                    OverlayService.showSwipe(decision)
-                    onDone(decision)
-                } catch (e: Exception) { Log.e(TAG, "swipe eval failed", e); onDone(null) }
-            }
+        work.submit {
+            try {
+                val shots = captureProfile(settings.profilePanels)
+                if (shots.isEmpty()) { onDone(null); return@submit }
+                val decision = swipeEngine.evaluate(shots, settings.swipePrefs())
+                if (decision.confidence >= 0.35) { if (decision.like) swipeRight() else swipeLeft() }
+                OverlayService.showSwipe(decision)
+                onDone(decision)
+            } catch (e: Exception) { Log.e(TAG, "swipe eval failed", e); onDone(null) }
         }
     }
 
-    /** Audit the profile photos currently on screen (triggered from the UI). */
+    /** Audit your profile photos (open your profile first). Captures multiple panels. */
     fun requestPhotoAudit(onResult: (PhotoAuditor.Audit) -> Unit) {
-        captureScreenJpeg { shot ->
-            if (shot == null) { onResult(PhotoAuditor.Audit(emptyList(), emptyList(), "no screenshot")); return@captureScreenJpeg }
-            work.submit {
-                val a = runCatching { photoAuditor.audit(listOf(shot), settings.swipeCriteria) }
-                    .getOrElse { PhotoAuditor.Audit(emptyList(), emptyList(), "audit failed: ${it.message}") }
-                onResult(a)
-            }
+        work.submit {
+            val shots = captureProfile(settings.profilePanels)
+            val a = if (shots.isEmpty()) PhotoAuditor.Audit(emptyList(), emptyList(), "no screenshot")
+            else runCatching { photoAuditor.audit(shots, settings.swipeCriteria) }
+                .getOrElse { PhotoAuditor.Audit(emptyList(), emptyList(), "audit failed: ${it.message}") }
+            onResult(a)
         }
     }
 
@@ -322,28 +334,99 @@ class DatingAccessibilityService : AccessibilityService() {
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
+    /**
+     * Capture the screen as JPEG bytes IN MEMORY ONLY. Nothing is ever written to disk,
+     * the gallery, or MediaStore — the bytes live in RAM just long enough to be analysed,
+     * then are dropped. Bitmaps are recycled immediately so nothing lingers. (The bytes are
+     * sent to the vision model over the network; that's inherent to cloud analysis.)
+     */
     private fun captureScreenJpeg(cb: (ByteArray?) -> Unit) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) { cb(null); return }
-        takeScreenshot(android.view.Display.DEFAULT_DISPLAY, work, object : TakeScreenshotCallback {
+        takeScreenshot(android.view.Display.DEFAULT_DISPLAY, shotExec, object : TakeScreenshotCallback {
             override fun onSuccess(result: ScreenshotResult) {
+                var bmp: Bitmap? = null
+                var sw: Bitmap? = null
                 try {
                     val buffer = result.hardwareBuffer
-                    val bmp = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
+                    bmp = Bitmap.wrapHardwareBuffer(buffer, result.colorSpace)
                     buffer.close()
                     if (bmp == null) { cb(null); return }
-                    val sw = bmp.copy(Bitmap.Config.ARGB_8888, false)
+                    sw = bmp.copy(Bitmap.Config.ARGB_8888, false)
                     val bos = ByteArrayOutputStream()
                     sw.compress(Bitmap.CompressFormat.JPEG, 80, bos)
                     cb(bos.toByteArray())
-                } catch (e: Exception) { Log.e(TAG, "screenshot convert failed", e); cb(null) }
+                } catch (e: Exception) {
+                    Log.e(TAG, "screenshot convert failed", e); cb(null)
+                } finally {
+                    sw?.recycle(); bmp?.recycle()   // wipe pixels from memory immediately
+                }
             }
             override fun onFailure(errorCode: Int) { Log.w(TAG, "screenshot failed $errorCode"); cb(null) }
         })
     }
 
+    /** Synchronous capture — call ONLY from the `work` thread (screenshot callback runs on shotExec). */
+    private fun captureJpegBlocking(): ByteArray? {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val holder = arrayOfNulls<ByteArray>(1)
+        captureScreenJpeg { holder[0] = it; latch.countDown() }
+        return try { latch.await(6, TimeUnit.SECONDS); holder[0] } catch (e: Exception) { null }
+    }
+
+    /**
+     * Capture several panels of the current profile — screenshot, scroll down, repeat —
+     * so the vision model sees all photos + the full bio, not just the first screen.
+     * Must run on the `work` thread.
+     */
+    private fun captureProfile(panels: Int): List<ByteArray> {
+        val shots = ArrayList<ByteArray>()
+        val n = panels.coerceIn(1, 6)
+        for (i in 0 until n) {
+            captureJpegBlocking()?.let { shots.add(it) }
+            if (i < n - 1) { scrollProfileDown(); try { Thread.sleep(700) } catch (_: Exception) {} }
+        }
+        return shots
+    }
+
+    /** Swipe up in the middle of the screen to scroll the profile content down. */
+    private fun scrollProfileDown() {
+        val m = resources.displayMetrics
+        val x = m.widthPixels * 0.5f
+        val path = Path().apply { moveTo(x, m.heightPixels * 0.75f); lineTo(x, m.heightPixels * 0.30f) }
+        dispatchGesture(GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 260)).build(), null, null)
+    }
+
     // ---------------------------------------------------------------------------
     // NODE HELPERS
     // ---------------------------------------------------------------------------
+
+    private fun setTextOn(node: AccessibilityNodeInfo, s: String) {
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, s)
+        }
+        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    /**
+     * Type the message one character at a time with human-ish delays, re-resolving the
+     * input field each step (the tree changes as text grows). Instant paste is a classic
+     * bot tell; this looks like real typing — slower per-character, with pauses after
+     * spaces and punctuation, and the odd longer "thinking" pause. Runs on a background
+     * thread (the scheduler), so the Thread.sleep calls are safe.
+     */
+    private fun typeHumanlike(profile: AppProfile, text: String) {
+        for (i in 1..text.length) {
+            val node = (rootInActiveWindow ?: break).let { findInputBox(it, profile) } ?: break
+            setTextOn(node, text.substring(0, i))
+            val ch = text[i - 1]
+            var delay = (45..150).random().toLong()
+            if (ch == ' ') delay += (0..110).random()
+            if (ch in ".,!?") delay += (120..320).random()
+            if (Math.random() < 0.06) delay += (300..900).random()   // occasional pause
+            try { Thread.sleep(delay) } catch (_: Exception) { break }
+        }
+    }
 
     private fun findById(root: AccessibilityNodeInfo, id: String): AccessibilityNodeInfo? =
         root.findAccessibilityNodeInfosByViewId(id)?.firstOrNull()

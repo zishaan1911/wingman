@@ -1,10 +1,15 @@
 package com.wingman.assist
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.IBinder
 import android.provider.Settings as AndroidSettings
 import android.view.Gravity
@@ -31,6 +36,7 @@ class OverlayService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        goForeground()
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         label = TextView(this).apply {
             text = status()
@@ -59,6 +65,34 @@ class OverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /** Promote to a foreground service so Android doesn't reap it (and the overlay stays up). */
+    private fun goForeground() {
+        val chId = "wingman"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val mgr = getSystemService(NotificationManager::class.java)
+            if (mgr.getNotificationChannel(chId) == null) {
+                mgr.createNotificationChannel(
+                    NotificationChannel(chId, "Wingman", NotificationManager.IMPORTANCE_MIN)
+                )
+            }
+        }
+        val notif: Notification = Notification.Builder(this, chId)
+            .setContentTitle("Wingman running")
+            .setContentText("Tap the floating control to pause.")
+            .setSmallIcon(android.R.drawable.ic_menu_send)
+            .setOngoing(true)
+            .build()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
+        } catch (e: Exception) {
+            // If FGS start is restricted, keep running as a normal service rather than crash.
+        }
+    }
+
     private fun onTap() {
         val pending = pendingApproval
         if (pending != null) { approveCb?.invoke(pending); clearApproval() }
@@ -85,6 +119,7 @@ class OverlayService : Service() {
     private fun refresh() { label.post { label.text = status() } }
 
     companion object {
+        private const val NOTIF_ID = 1001
         @Volatile var killSwitchEngaged = false
         private var instance: OverlayService? = null
         private var pendingLine: String? = null

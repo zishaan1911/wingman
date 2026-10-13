@@ -26,6 +26,16 @@ enum class Tone { GENUINE, PLAYFUL, SCARCITY, WARM }
  */
 enum class Pace { MIRROR, SLIGHTLY_SLOWER, VARIABLE, WARM_PROMPT }
 
+/**
+ * How flirty to be with THIS match, inferred from how they communicate.
+ *  CLEAN      = friendly, no romantic/sexual charge.
+ *  FLIRTY     = playful, warm, light romantic interest.
+ *  SUGGESTIVE = clearly flirtatious with innuendo; still tasteful, never graphic.
+ * Anything beyond SUGGESTIVE (explicit) is never auto-sent — it's drafted and handed
+ * to you to approve. And a possible-minor signal forces CLEAN, always.
+ */
+enum class Flirt { CLEAN, FLIRTY, SUGGESTIVE }
+
 /** How much the bot may do on its own. Editable from the dev panel. */
 enum class AutonomyMode {
     /** Sends everything itself, including big moves. */
@@ -63,6 +73,12 @@ data class MatchStrategy(
     val rationale: String,
     /** Durable facts about the match worth remembering for callbacks (from the same read). */
     val facts: List<String> = emptyList(),
+    /** How flirty to be with this match (inferred from how they talk). */
+    val flirt: Flirt = Flirt.CLEAN,
+    /** The latest exchange is explicitly sexual → draft but hand to the user, never auto-send. */
+    val explicit: Boolean = false,
+    /** Any signal the match may be under 18 → forces CLEAN and blocks all suggestive content. */
+    val possibleMinor: Boolean = false,
 ) {
     companion object {
         /** Safe default before we've analysed anyone. */

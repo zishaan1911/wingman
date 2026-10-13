@@ -162,3 +162,40 @@ Beyond timing + tone, the app works the whole funnel:
   feasible via accessibility).
 
 All of these are toggleable in the dev panel.
+
+## Robustness & realism
+
+- **Human-like typing** — replies are typed character-by-character with realistic,
+  jittered delays (pauses after spaces/punctuation, occasional longer pauses) instead of
+  pasted instantly. Instant paste is a classic bot tell; this reads as real typing and
+  reduces detection risk. Toggle in the dev panel.
+- **Multi-panel profile capture** — before a swipe/opener decision the app screenshots the
+  profile, scrolls, and screenshots again (configurable 1–6 panels) so the vision model
+  sees all photos + the full bio, not just the first screen.
+- **Persistence** — conversations and message timestamps are saved to disk (JSON), so the
+  timing/mirroring/decay models keep their history across restarts instead of resetting.
+  (Lightweight JSON rather than an ORM; swap for Room later if the data grows.)
+- **Reliability** — scheduled sends are persisted and re-armed on service (re)connect, so a
+  pending reply survives the process being killed; the overlay runs as a foreground service
+  so Android doesn't reap it. (WorkManager isn't used because only the live accessibility
+  service can perform the type/tap — it's already a persistent, re-bound process, so
+  persisting the queue there is the correct fix.)
+
+## Flirtation & boundaries
+
+The strategist reads how flirty each match is being and matches it per-match, up to a
+**ceiling you set in the dev panel** (`CLEAN → FLIRTY → SUGGESTIVE`). Two hard rules are
+built in and not configurable:
+
+- **Explicit content is never auto-sent.** If a thread turns explicitly sexual, the bot
+  drafts a reply and hands it to you in the overlay to approve/edit/send — you remain the
+  one who sends it.
+- **Adult-only.** Any signal that a match may be under 18 forces `CLEAN` and blocks all
+  suggestive content.
+
+## Screenshots & privacy
+
+Screenshots are **never written to your phone** (no gallery, no disk, no MediaStore) — the
+bytes exist only in RAM long enough to be analysed, bitmaps are recycled immediately. They
+are sent to Groq over the network for analysis (inherent to a cloud vision model); if you
+want zero cloud exposure of images, that needs an on-device vision model (not yet built).

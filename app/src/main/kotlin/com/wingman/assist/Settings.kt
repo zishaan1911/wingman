@@ -58,6 +58,16 @@ class Settings(ctx: Context) {
         get() = sp.getBoolean("bandit", true)
         set(v) = sp.edit().putBoolean("bandit", v).apply()
 
+    /**
+     * Upper bound on auto-flirtation. The strategist picks per-match up to this ceiling.
+     * Explicit content is never auto-sent regardless (always handed to you), and a
+     * possible-minor signal forces CLEAN no matter what this is set to.
+     */
+    var flirtCeiling: Flirt
+        get() = runCatching { Flirt.valueOf(sp.getString("flirtCeiling", null) ?: "SUGGESTIVE") }
+            .getOrDefault(Flirt.SUGGESTIVE)
+        set(v) = sp.edit().putString("flirtCeiling", v.name).apply()
+
     // --- strategy override: when non-null, forces tone/pace instead of the strategist ---
     var forceTone: Tone?
         get() = sp.getString("forceTone", null)?.let { runCatching { Tone.valueOf(it) }.getOrNull() }
@@ -67,10 +77,21 @@ class Settings(ctx: Context) {
         get() = sp.getString("forcePace", null)?.let { runCatching { Pace.valueOf(it) }.getOrNull() }
         set(v) = sp.edit().apply { if (v == null) remove("forcePace") else putString("forcePace", v.name) }.apply()
 
+    // --- human-likeness ---
+    /** Type replies character-by-character with realistic delays instead of pasting instantly. */
+    var humanTyping: Boolean
+        get() = sp.getBoolean("humanTyping", true)
+        set(v) = sp.edit().putBoolean("humanTyping", v).apply()
+
     // --- swiping ---
     var dailySwipeCap: Int
         get() = sp.getInt("swipeCap", 60)
         set(v) = sp.edit().putInt("swipeCap", v).apply()
+
+    /** How many panels (scrolls) to capture of a profile before deciding. */
+    var profilePanels: Int
+        get() = sp.getInt("profilePanels", 3)
+        set(v) = sp.edit().putInt("profilePanels", v).apply()
 
     // --- persona ---
     var personaName: String

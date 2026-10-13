@@ -36,9 +36,14 @@ class MatchStrategist(private val groq: GroqClient) {
             appendLine("- wantsOffApp: true if they hinted at texting / another app / a call.")
             appendLine("- facts: array of short durable facts worth remembering about THEM for later callbacks")
             appendLine("    (job, pet, trip, exam, hobby, plans). Only things they actually stated. [] if none.")
+            appendLine("- flirt: one of CLEAN, FLIRTY, SUGGESTIVE — how flirtatious THEY are being / inviting.")
+            appendLine("    CLEAN=no romantic charge; FLIRTY=playful romantic; SUGGESTIVE=clear innuendo. Match their level.")
+            appendLine("- explicit: true if the latest messages are explicitly sexual (graphic), not just suggestive.")
+            appendLine("- possibleMinor: true if ANYTHING suggests the match may be under 18 (stated age, school year,")
+            appendLine("    'in high school', teen references). Err toward true if unsure.")
             appendLine()
             appendLine("Respond with ONLY this JSON, no markdown:")
-            appendLine("""{"tone":"GENUINE","pace":"MIRROR","interest":0.0,"readiness":0.0,"wantsOffApp":false,"rationale":"short","facts":["..."]}""")
+            appendLine("""{"tone":"GENUINE","pace":"MIRROR","interest":0.0,"readiness":0.0,"wantsOffApp":false,"rationale":"short","facts":["..."],"flirt":"CLEAN","explicit":false,"possibleMinor":false}""")
         }
 
         val transcript = conversation.messages.joinToString("\n") { m ->
@@ -71,6 +76,9 @@ class MatchStrategist(private val groq: GroqClient) {
             wantsOffApp = o.optBoolean("wantsOffApp", false),
             rationale = o.optString("rationale", "").trim(),
             facts = facts,
+            flirt = runCatching { Flirt.valueOf(o.optString("flirt", "CLEAN").uppercase()) }.getOrDefault(Flirt.CLEAN),
+            explicit = o.optBoolean("explicit", false),
+            possibleMinor = o.optBoolean("possibleMinor", false),
         )
     }
 }

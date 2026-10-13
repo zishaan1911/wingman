@@ -80,11 +80,28 @@ class DevPanelActivity : Activity() {
         val sCrit = col.field("What you're looking for", s.swipeCriteria)
         val sSel = col.field("Selectivity (0 picky – 1 liberal)", s.swipeSelectivity.toString(), number = true)
         val sCap = col.field("Daily swipe cap", s.dailySwipeCap.toString(), number = true)
+        val sPanels = col.field("Profile panels to capture (1–6)", s.profilePanels.toString(), number = true)
+        col.check("Human-like typing (no instant paste)", s.humanTyping) { s.humanTyping = it }
 
         col.header("Chances optimization")
         col.check("Send personalized openers to new matches", s.autoOpenerEnabled) { s.autoOpenerEnabled = it }
         col.check("Learning loop (nudge tone toward what works)", s.banditEnabled) { s.banditEnabled = it }
         col.check("Disengage from cold threads", s.disengageWhenCold) { s.disengageWhenCold = it }
+
+        col.header("Flirtation (per-match, up to this ceiling)")
+        col.addView(TextView(this).apply {
+            text = "Strategist picks per match up to this cap. Explicit is always handed to you to approve; " +
+                "a possible-minor signal forces CLEAN."
+            setPadding(0, 0, 0, 8)
+        })
+        val flirtBtn = Button(this)
+        fun renderFlirt() { flirtBtn.text = "Max flirtation: ${s.flirtCeiling}" }
+        renderFlirt()
+        flirtBtn.setOnClickListener {
+            val vals = Flirt.values()
+            s.flirtCeiling = vals[(s.flirtCeiling.ordinal + 1) % vals.size]; renderFlirt()
+        }
+        col.addView(flirtBtn)
 
         col.header("Analytics")
         val learn = LearningStore(this)
@@ -147,6 +164,7 @@ class DevPanelActivity : Activity() {
                 s.swipeCriteria = sCrit.text.toString()
                 sSel.text.toString().toDoubleOrNull()?.let { s.swipeSelectivity = it.coerceIn(0.0, 1.0) }
                 sCap.text.toString().toIntOrNull()?.let { s.dailySwipeCap = it }
+                sPanels.text.toString().toIntOrNull()?.let { s.profilePanels = it.coerceIn(1, 6) }
                 Toast.makeText(this@DevPanelActivity, "Saved", Toast.LENGTH_SHORT).show()
             }
         })
