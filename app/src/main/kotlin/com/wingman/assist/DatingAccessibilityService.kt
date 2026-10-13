@@ -314,9 +314,10 @@ class DatingAccessibilityService : AccessibilityService() {
         if (OverlayService.killSwitchEngaged || !settings.autoSwipeEnabled) { onDone(null); return }
         work.submit {
             try {
-                val shots = captureProfile(settings.profilePanels)
-                if (shots.isEmpty()) { onDone(null); return@submit }
-                val decision = swipeEngine.evaluate(shots, settings.swipePrefs())
+                // Judge the VISIBLE card only — don't open/scroll into the profile while swiping.
+                // (Deep personality read happens after matching.) Fast and more human.
+                val shot = captureJpegBlocking() ?: run { onDone(null); return@submit }
+                val decision = swipeEngine.evaluate(listOf(shot), settings.swipePrefs())
                 if (decision.confidence >= 0.35) { if (decision.like) swipeRight() else swipeLeft() }
                 OverlayService.showSwipe(decision)
                 onDone(decision)

@@ -84,7 +84,7 @@ class DevPanelActivity : Activity() {
 
         col.header("Swiping")
         val sCap = col.field("Daily swipe cap", s.dailySwipeCap.toString(), number = true)
-        val sPanels = col.field("Profile panels to capture (1–6)", s.profilePanels.toString(), number = true)
+        val sPanels = col.field("Profile panels for openers/photo audit (1–6)", s.profilePanels.toString(), number = true)
         col.check("Human-like typing (no instant paste)", s.humanTyping) { s.humanTyping = it }
         col.check("Notify me for important events", s.notifyImportant) { s.notifyImportant = it }
 

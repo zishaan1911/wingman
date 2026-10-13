@@ -169,9 +169,9 @@ All of these are toggleable in the dev panel.
   jittered delays (pauses after spaces/punctuation, occasional longer pauses) instead of
   pasted instantly. Instant paste is a classic bot tell; this reads as real typing and
   reduces detection risk. Toggle in the dev panel.
-- **Multi-panel profile capture** — before a swipe/opener decision the app screenshots the
-  profile, scrolls, and screenshots again (configurable 1–6 panels) so the vision model
-  sees all photos + the full bio, not just the first screen.
+- **Multi-panel profile capture** — for **openers and the photo audit** (not swiping), the
+  app screenshots, scrolls, and screenshots again (configurable 1–6 panels) so the vision
+  model sees all photos + the full bio. Swiping judges the visible card only (see below).
 - **Persistence** — conversations and message timestamps are saved to disk (JSON), so the
   timing/mirroring/decay models keep their history across restarts instead of resetting.
   (Lightweight JSON rather than an ORM; swap for Room later if the data grows.)
@@ -209,6 +209,11 @@ The dev panel has a **My type** section with three fields:
 
 The swipe engine weighs looks *and* personality together and auto-passes on dealbreakers,
 so you don't spend time on matches you wouldn't date anyway.
+
+**Swiping judges the visible card only** — it doesn't open/scroll into each profile (faster,
+and more human). So at swipe time, personality filtering is limited to whatever's visible on
+the card; the full personality read (and your `personality` criteria) comes into play after
+you match, in the strategist and opener. Dealbreakers and looks apply at swipe time as usual.
 
 ## Notifications
 
