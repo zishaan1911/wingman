@@ -150,7 +150,7 @@ class OverlayService : Service() {
 
         fun showPending(match: String, text: String, at: Instant) {
             val mins = ((at.toEpochMilli() - System.currentTimeMillis()) / 60000).coerceAtLeast(0)
-            pendingLine = "→ $match in ${mins}m: " + text.take(40)
+            pendingLine = "→ $match in ${mins}m:\n" + text.take(140)
             instance?.refresh()
         }
 
