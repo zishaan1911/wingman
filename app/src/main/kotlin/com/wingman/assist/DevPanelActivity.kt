@@ -76,12 +76,17 @@ class DevPanelActivity : Activity() {
         val pBound = col.field("Boundaries (never cross)", s.personaBoundaries)
         val pWarmth = col.field("Warmth floor (0–1)", s.personaWarmth.toString(), number = true)
 
-        col.header("Swiping")
-        val sCrit = col.field("What you're looking for", s.swipeCriteria)
+        col.header("My type (so effort isn't wasted on the wrong people)")
+        val sLooks = col.field("Looks I like (judged from photos)", s.swipeLooks)
+        val sPers = col.field("Personality / lifestyle I want (from bio & prompts)", s.swipePersonality)
+        val sDeal = col.field("Dealbreakers (any present → auto-pass)", s.swipeDealbreakers)
         val sSel = col.field("Selectivity (0 picky – 1 liberal)", s.swipeSelectivity.toString(), number = true)
+
+        col.header("Swiping")
         val sCap = col.field("Daily swipe cap", s.dailySwipeCap.toString(), number = true)
         val sPanels = col.field("Profile panels to capture (1–6)", s.profilePanels.toString(), number = true)
         col.check("Human-like typing (no instant paste)", s.humanTyping) { s.humanTyping = it }
+        col.check("Notify me for important events", s.notifyImportant) { s.notifyImportant = it }
 
         col.header("Chances optimization")
         col.check("Send personalized openers to new matches", s.autoOpenerEnabled) { s.autoOpenerEnabled = it }
@@ -161,7 +166,9 @@ class DevPanelActivity : Activity() {
                 s.personaBio = pBio.text.toString()
                 s.personaBoundaries = pBound.text.toString()
                 pWarmth.text.toString().toDoubleOrNull()?.let { s.personaWarmth = it.coerceIn(0.0, 1.0) }
-                s.swipeCriteria = sCrit.text.toString()
+                s.swipeLooks = sLooks.text.toString()
+                s.swipePersonality = sPers.text.toString()
+                s.swipeDealbreakers = sDeal.text.toString()
                 sSel.text.toString().toDoubleOrNull()?.let { s.swipeSelectivity = it.coerceIn(0.0, 1.0) }
                 sCap.text.toString().toIntOrNull()?.let { s.dailySwipeCap = it }
                 sPanels.text.toString().toIntOrNull()?.let { s.profilePanels = it.coerceIn(1, 6) }

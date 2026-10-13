@@ -199,3 +199,31 @@ Screenshots are **never written to your phone** (no gallery, no disk, no MediaSt
 bytes exist only in RAM long enough to be analysed, bitmaps are recycled immediately. They
 are sent to Groq over the network for analysis (inherent to a cloud vision model); if you
 want zero cloud exposure of images, that needs an on-device vision model (not yet built).
+
+## Your "type" — don't waste effort on the wrong people
+
+The dev panel has a **My type** section with three fields:
+- **Looks I like** — judged from the photos.
+- **Personality / lifestyle I want** — judged from the bio & prompts.
+- **Dealbreakers** — any present is an automatic pass, no matter how good the rest is.
+
+The swipe engine weighs looks *and* personality together and auto-passes on dealbreakers,
+so you don't spend time on matches you wouldn't date anyway.
+
+## Notifications
+
+With **Notify me for important events** on, you get a phone notification (tap to open the
+dev panel) for the things that need your eyes — a reply waiting for your approval (explicit
+handoff, a date/off-app move, or supervised mode) and safety flags (possible under-18
+match). Routine auto-replies don't notify. Needs notification permission (requested on first
+launch, Android 13+).
+
+## Running it in the background (and the honest limit)
+
+- It's **event- and timer-driven, not busy-looping** — it idles cheaply and does real work
+  only when a dating app is in the foreground, so it won't peg the CPU or drain the battery.
+  The overlay runs as a foreground service so Android keeps it alive.
+- **Hard Android limit:** an accessibility service can only read and tap the app that's
+  currently on screen. It **cannot** swipe/reply with the screen off or while you're in
+  another app — no app can. Realistic use is "open the dating app, set the phone down, let
+  it run," not "runs invisibly while you use your phone for other things."

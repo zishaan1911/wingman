@@ -13,16 +13,22 @@ class SwipeEngine(private val groq: GroqClient) {
 
     fun evaluate(profileImages: List<ByteArray>, prefs: SwipePrefs): SwipeDecision {
         val system = buildString {
-            appendLine("You evaluate dating-app profiles for the user and decide swipe direction.")
-            appendLine("The user's criteria: ${prefs.criteria}")
-            appendLine("Selectivity: ${"%.2f".format(prefs.selectivity)} (0 = very picky, swipe right rarely; 1 = swipe right liberally).")
-            appendLine("Judge on what's visible: photos and any bio text. Do NOT invent details you can't see.")
-            appendLine("Be respectful; base 'like' purely on the user's stated criteria and compatibility signals.")
+            appendLine("You evaluate dating-app profiles for the user and decide swipe direction, so the user")
+            appendLine("doesn't waste effort on people they wouldn't want to date.")
+            appendLine()
+            appendLine("The user's type:")
+            appendLine("- LOOKS (judge from the photos): ${prefs.looks.ifBlank { "no strong preference" }}")
+            appendLine("- PERSONALITY/LIFESTYLE (judge from bio & prompts): ${prefs.personality.ifBlank { "no strong preference" }}")
+            appendLine("- DEALBREAKERS (any present → like=false, no matter what else): ${prefs.dealbreakers.ifBlank { "none" }}")
+            appendLine("Selectivity: ${"%.2f".format(prefs.selectivity)} (0 = very picky, right-swipe rarely; 1 = liberal).")
+            appendLine()
+            appendLine("Weigh BOTH looks and personality. A dealbreaker is an automatic pass. If the bio is empty,")
+            appendLine("judge on photos but lower confidence. Do NOT invent details you can't see. Be respectful.")
             appendLine()
             appendLine("Respond with ONLY a JSON object, no markdown:")
             appendLine("""{"like": true|false, "confidence": 0.0-1.0, "reason": "one short sentence"}""")
         }
-        val user = "Here are the profile screenshots. Decide whether to swipe right. Return the JSON object only."
+        val user = "Here are the profile panels. Decide whether to swipe right on the user's behalf. Return the JSON object only."
 
         val raw = groq.completeWithImages(system, user, profileImages, temperature = 0.3, maxTokens = 160)
         return parse(raw)

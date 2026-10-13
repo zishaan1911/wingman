@@ -37,6 +37,7 @@ class DatingAccessibilityService : AccessibilityService() {
     private lateinit var settings: Settings
     private lateinit var learning: LearningStore
     private lateinit var memory: MatchMemory
+    private lateinit var notifier: Notifier
     private val decay = DecayDetector()
 
     private val groq by lazy { GroqClient(BuildConfigKey.GROQ_API_KEY) }
@@ -62,6 +63,7 @@ class DatingAccessibilityService : AccessibilityService() {
         store = ConversationStore(this)
         learning = LearningStore(this)
         memory = MatchMemory(this)
+        notifier = Notifier(this)
         escalation = EscalationPolicy(settings)
         scheduler = SendScheduler(this) { reply -> performScheduledSend(reply) }
         // Re-arm any sends that were pending when we were last killed.
@@ -157,6 +159,11 @@ class DatingAccessibilityService : AccessibilityService() {
             // 2. remember new facts for future callbacks
             memory.merge(convoId, strategy.facts)
 
+            // 2b. safety flag: possible under-18 → surface it (we never act sexual on these)
+            if (strategy.possibleMinor && settings.notifyImportant) {
+                notifier.alert("Possible under-18 match", "$matchName — forced clean. Worth reviewing.")
+            }
+
             // 3. cooling off? optionally disengage
             val state = decay.assess(convo, strategy)
             if (state == DecayState.COLD && settings.disengageWhenCold) {
@@ -217,6 +224,14 @@ class DatingAccessibilityService : AccessibilityService() {
     /** Either schedule directly, or route through the overlay for your approval. */
     private fun dispatch(reply: ScheduledReply) {
         if (reply.needsApproval) {
+            if (settings.notifyImportant) {
+                val why = when (reply.escalation) {
+                    EscalationAction.PROPOSE_DATE -> "date"
+                    EscalationAction.MOVE_OFF_APP -> "off-app"
+                    else -> "review"
+                }
+                notifier.approvalNeeded(reply.matchName, reply.text, why)
+            }
             OverlayService.requestApproval(
                 reply,
                 onApprove = { scheduler.schedule(it); OverlayService.showPending(it.matchName, it.text, it.sendAt) },
@@ -314,7 +329,7 @@ class DatingAccessibilityService : AccessibilityService() {
         work.submit {
             val shots = captureProfile(settings.profilePanels)
             val a = if (shots.isEmpty()) PhotoAuditor.Audit(emptyList(), emptyList(), "no screenshot")
-            else runCatching { photoAuditor.audit(shots, settings.swipeCriteria) }
+            else runCatching { photoAuditor.audit(shots, settings.swipePrefs().summary()) }
                 .getOrElse { PhotoAuditor.Audit(emptyList(), emptyList(), "audit failed: ${it.message}") }
             onResult(a)
         }

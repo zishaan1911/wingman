@@ -140,11 +140,24 @@ data class Persona(
     val warmth: Double = 0.55,
 )
 
-/** What you're looking for, fed into the swipe decision. */
+/**
+ * Your "type" — fed into the swipe decision so effort isn't wasted on people you wouldn't
+ * date anyway. Looks is judged from photos, personality from the bio/prompts, and anything
+ * matching a dealbreaker is an automatic pass regardless of the rest.
+ */
 data class SwipePrefs(
-    val criteria: String,
+    /** Physical preferences (e.g. "tall, fit, into fashion; not my type: heavy smokers in pics"). */
+    val looks: String,
+    /** Personality / lifestyle you want (e.g. "ambitious, witty, outdoorsy, reads; wants kids"). */
+    val personality: String,
+    /** Hard noes — any of these present → pass. (e.g. "smoking, no bio, only group photos, under 25"). */
+    val dealbreakers: String,
+    /** 0 = very picky (right-swipe rarely), 1 = liberal. */
     val selectivity: Double = 0.5,
-)
+) {
+    /** One-line summary for places that want a single "looking for" string (e.g. photo audit). */
+    fun summary(): String = listOf(looks, personality).filter { it.isNotBlank() }.joinToString("; ")
+}
 
 /** Output of a swipe evaluation. */
 data class SwipeDecision(

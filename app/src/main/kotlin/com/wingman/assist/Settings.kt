@@ -110,14 +110,26 @@ class Settings(ctx: Context) {
         get() = sp.getFloat("pWarmth", 0.55f).toDouble()
         set(v) = sp.edit().putFloat("pWarmth", v.toFloat()).apply()
 
-    // --- swipe prefs ---
-    var swipeCriteria: String
-        get() = sp.getString("sCriteria", "") ?: ""
-        set(v) = sp.edit().putString("sCriteria", v).apply()
+    // --- your type (swipe prefs) ---
+    var swipeLooks: String
+        get() = sp.getString("sLooks", "") ?: ""
+        set(v) = sp.edit().putString("sLooks", v).apply()
+    var swipePersonality: String
+        get() = sp.getString("sPersonality", "") ?: ""
+        set(v) = sp.edit().putString("sPersonality", v).apply()
+    var swipeDealbreakers: String
+        get() = sp.getString("sDealbreakers", "") ?: ""
+        set(v) = sp.edit().putString("sDealbreakers", v).apply()
     var swipeSelectivity: Double
         get() = sp.getFloat("sSelect", 0.5f).toDouble()
         set(v) = sp.edit().putFloat("sSelect", v.toFloat()).apply()
 
+    // --- notifications ---
+    /** Push a phone notification for important events (approval needed, safety flag). */
+    var notifyImportant: Boolean
+        get() = sp.getBoolean("notify", true)
+        set(v) = sp.edit().putBoolean("notify", v).apply()
+
     fun persona() = Persona(personaName, personaVoice, personaBio, personaBoundaries, personaWarmth)
-    fun swipePrefs() = SwipePrefs(swipeCriteria, swipeSelectivity)
+    fun swipePrefs() = SwipePrefs(swipeLooks, swipePersonality, swipeDealbreakers, swipeSelectivity)
 }
