@@ -22,6 +22,8 @@ class SwipeLoopController(
     private val isEnabled: () -> Boolean,
     private val canSwipeNow: () -> Boolean,
     private val doSwipe: (onDone: () -> Unit) -> Unit,
+    /** Called when enabled but not on the deck — a chance to launch the app (throttled by caller). */
+    private val onNotReady: () -> Unit = {},
 ) {
     private val exec = Executors.newSingleThreadScheduledExecutor()
     @Volatile private var running = false
@@ -53,7 +55,7 @@ class SwipeLoopController(
     private fun tick() {
         if (!running) return
         if (!isEnabled()) { schedule(IDLE_POLL); return }
-        if (!canSwipeNow()) { schedule(IDLE_POLL); return }
+        if (!canSwipeNow()) { onNotReady(); schedule(IDLE_POLL); return }
         try {
             doSwipe { afterSwipe() }
         } catch (e: Exception) {

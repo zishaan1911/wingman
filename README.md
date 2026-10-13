@@ -232,3 +232,17 @@ launch, Android 13+).
   currently on screen. It **cannot** swipe/reply with the screen off or while you're in
   another app — no app can. Realistic use is "open the dating app, set the phone down, let
   it run," not "runs invisibly while you use your phone for other things."
+
+### Auto-opening the app
+
+To reduce babysitting, the app can launch the dating app itself when there's work (dev panel
+→ *Auto-open the app*):
+- **Open the app to deliver a due reply** (on by default) — when a scheduled reply's time
+  comes and that chat isn't on screen, it launches the app and the reply sends automatically
+  **as soon as the correct chat is on screen**. Critical safety rule: it verifies the match
+  name and will **never** send a drafted reply into the wrong chat — if it can't confirm it's
+  the right chat, it waits (and notifies you) instead of sending.
+- **Open the app to auto-swipe unattended** (off by default — more autonomous) — launches
+  your chosen *Auto-swipe app* so the swipe loop can run without you opening it first.
+
+Launching is throttled so it won't thrash, and it still can't do anything with the screen off.

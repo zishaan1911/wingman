@@ -2,6 +2,7 @@ package com.wingman.assist
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
@@ -55,6 +56,9 @@ class DatingAccessibilityService : AccessibilityService() {
     private val seenConvos = HashSet<String>()
     /** convoId -> (tone used, was it an opener) — to credit the outcome when they reply. */
     private val awaitingReply = HashMap<String, Pair<Tone, Boolean>>()
+    /** Replies whose time has come but whose chat isn't on screen yet; sent when it is. */
+    private val dueSends = java.util.concurrent.ConcurrentHashMap<String, ScheduledReply>()
+    @Volatile private var lastOpenAt = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -73,6 +77,7 @@ class DatingAccessibilityService : AccessibilityService() {
             isEnabled = { settings.autoSwipeEnabled && !OverlayService.killSwitchEngaged },
             canSwipeNow = { isOnSwipeScreen() },
             doSwipe = { done -> swipeOnce { done() } },
+            onNotReady = { if (settings.autoOpenForSwipe) openApp(settings.swipeApp) },
         )
         swipeLoop.start()
         OverlayService.start(this)
@@ -130,6 +135,9 @@ class DatingAccessibilityService : AccessibilityService() {
             learning.record(OutcomeKind.GOT_REPLY, tone)
             if (wasOpener) learning.recordOpenerReply()
         }
+
+        // A send was waiting for this exact chat to be on screen — fire it now.
+        dueSends.remove(convoId)?.let { pending -> work.submit { doSend(pending) }; return }
 
         if (convoId in scheduled) return
 
@@ -274,24 +282,45 @@ class DatingAccessibilityService : AccessibilityService() {
     // SENDING
     // ---------------------------------------------------------------------------
 
+    /**
+     * Timer fired for a reply. If we're already on the correct chat, send now. Otherwise queue
+     * it and (optionally) launch the app — it will send automatically once the RIGHT chat is on
+     * screen. We never send into whatever chat happens to be open.
+     */
     private fun performScheduledSend(reply: ScheduledReply) {
-        if (OverlayService.killSwitchEngaged || !settings.autoReplyEnabled) { scheduled.remove(reply.conversationId); return }
+        if (OverlayService.killSwitchEngaged || !settings.autoReplyEnabled) { cleanupSend(reply.conversationId); return }
         val root = rootInActiveWindow
         val profile = root?.packageName?.toString()?.let { AppProfile.forPackage(it) }
-        if (root == null || profile == null) {
-            Log.w(TAG, "send skipped: target app not in foreground"); scheduled.remove(reply.conversationId); return
+        val onRightChat = root != null && profile != null && currentConvoId(root, profile) == reply.conversationId
+        if (onRightChat) { work.submit { doSend(reply) }; return }
+
+        // Not on the right chat → keep it pending; bring the app up; it'll fire from handleChatScreen.
+        dueSends[reply.conversationId] = reply
+        if (settings.autoOpenForSend) appOf(reply.conversationId)?.let { openApp(it) }
+        if (settings.notifyImportant) notifier.readyToSend(reply.matchName, reply.text)
+        Log.i(TAG, "send queued (waiting for ${reply.conversationId} to be on screen)")
+    }
+
+    /**
+     * Perform the actual type + send. Runs on the `work` thread. Re-verifies we're on the
+     * correct chat first (foreground can change between queueing and execution) — if not, it
+     * re-queues rather than sending to the wrong person.
+     */
+    private fun doSend(reply: ScheduledReply) {
+        if (OverlayService.killSwitchEngaged || !settings.autoReplyEnabled) { cleanupSend(reply.conversationId); return }
+        val root = rootInActiveWindow
+        val profile = root?.packageName?.toString()?.let { AppProfile.forPackage(it) }
+        if (root == null || profile == null || currentConvoId(root, profile) != reply.conversationId) {
+            dueSends[reply.conversationId] = reply; return    // not the right chat (any more) → keep pending
         }
-        val input = findInputBox(root, profile) ?: run { scheduled.remove(reply.conversationId); return }
+        val input = findInputBox(root, profile) ?: run { dueSends[reply.conversationId] = reply; return }
 
         if (settings.humanTyping) typeHumanlike(profile, reply.text) else setTextOn(input, reply.text)
-
-        // re-resolve the send button against the current tree (it may have changed after typing)
         val freshRoot = rootInActiveWindow ?: root
         val sendBtn = profile.sendButtonId?.let { findById(freshRoot, it) }
         if (sendBtn != null) sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         else Log.w(TAG, "no send button id; set sendButtonId in AppProfile")
 
-        // record outcomes for the learning loop
         if (reply.isOpener) learning.record(OutcomeKind.OPENER_SENT, reply.tone)
         learning.record(OutcomeKind.REPLY_SENT, reply.tone)
         when (reply.escalation) {
@@ -300,11 +329,12 @@ class DatingAccessibilityService : AccessibilityService() {
             EscalationAction.NONE -> {}
         }
         awaitingReply[reply.conversationId] = reply.tone to reply.isOpener
-
         OverlayService.clearPending()
-        scheduled.remove(reply.conversationId)
+        cleanupSend(reply.conversationId)
         Log.i(TAG, "sent to ${reply.conversationId} tone=${reply.tone} [${reply.escalation}]")
     }
+
+    private fun cleanupSend(id: String) { scheduled.remove(id); dueSends.remove(id) }
 
     // ---------------------------------------------------------------------------
     // SWIPING
@@ -443,6 +473,25 @@ class DatingAccessibilityService : AccessibilityService() {
             try { Thread.sleep(delay) } catch (_: Exception) { break }
         }
     }
+
+    /** Launch a dating app to the foreground (throttled) so we can act on it. */
+    private fun openApp(app: App) {
+        val pkg = AppProfile.ALL.firstOrNull { it.app == app }?.packageName ?: return
+        val now = System.currentTimeMillis()
+        if (now - lastOpenAt < 15_000) return                  // don't thrash the launcher
+        val intent = packageManager.getLaunchIntentForPackage(pkg)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: return
+        try { startActivity(intent); lastOpenAt = now; Log.i(TAG, "opened $pkg") }
+        catch (e: Exception) { Log.w(TAG, "openApp failed", e) }
+    }
+
+    /** The conversation id of the chat currently on screen, or null if it can't be determined. */
+    private fun currentConvoId(root: AccessibilityNodeInfo, profile: AppProfile): String? {
+        val name = profile.matchNameId?.let { findById(root, it)?.text?.toString() } ?: return null
+        return "${profile.app}:$name"
+    }
+
+    private fun appOf(convoId: String): App? =
+        runCatching { App.valueOf(convoId.substringBefore(":")) }.getOrNull()
 
     private fun findById(root: AccessibilityNodeInfo, id: String): AccessibilityNodeInfo? =
         root.findAccessibilityNodeInfosByViewId(id)?.firstOrNull()

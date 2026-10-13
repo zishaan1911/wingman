@@ -130,6 +130,23 @@ class Settings(ctx: Context) {
         get() = sp.getBoolean("notify", true)
         set(v) = sp.edit().putBoolean("notify", v).apply()
 
+    // --- auto-open the dating app when there's work ---
+    /** When a scheduled reply is due but the app isn't open, launch it (send still only fires
+     *  once the CORRECT chat is on screen — never the wrong one). */
+    var autoOpenForSend: Boolean
+        get() = sp.getBoolean("openForSend", true)
+        set(v) = sp.edit().putBoolean("openForSend", v).apply()
+
+    /** Auto-launch the swipe app to run the swipe loop unattended (more autonomous; off by default). */
+    var autoOpenForSwipe: Boolean
+        get() = sp.getBoolean("openForSwipe", false)
+        set(v) = sp.edit().putBoolean("openForSwipe", v).apply()
+
+    /** Which app to open for auto-swiping. */
+    var swipeApp: App
+        get() = runCatching { App.valueOf(sp.getString("swipeApp", null) ?: "TINDER") }.getOrDefault(App.TINDER)
+        set(v) = sp.edit().putString("swipeApp", v.name).apply()
+
     fun persona() = Persona(personaName, personaVoice, personaBio, personaBoundaries, personaWarmth)
     fun swipePrefs() = SwipePrefs(swipeLooks, swipePersonality, swipeDealbreakers, swipeSelectivity)
 }

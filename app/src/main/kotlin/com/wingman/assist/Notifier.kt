@@ -41,6 +41,11 @@ class Notifier(private val ctx: Context) {
         post(ID_APPROVAL, "Approval needed · $matchName", "[$why] ${preview.take(90)}")
     }
 
+    /** A reply is due but its chat isn't open — open the chat and it sends automatically. */
+    fun readyToSend(matchName: String, preview: String) {
+        post(ID_APPROVAL, "Ready to send · $matchName", "Open the chat to send: ${preview.take(90)}")
+    }
+
     /** A safety flag (e.g. possible under-18) — surfaced, not acted on automatically. */
     fun alert(title: String, body: String) {
         post(ID_ALERT, title, body)

@@ -88,6 +88,17 @@ class DevPanelActivity : Activity() {
         col.check("Human-like typing (no instant paste)", s.humanTyping) { s.humanTyping = it }
         col.check("Notify me for important events", s.notifyImportant) { s.notifyImportant = it }
 
+        col.header("Auto-open the app")
+        col.check("Open the app to deliver a due reply", s.autoOpenForSend) { s.autoOpenForSend = it }
+        col.check("Open the app to auto-swipe unattended", s.autoOpenForSwipe) { s.autoOpenForSwipe = it }
+        val swipeAppBtn = Button(this)
+        fun renderSwipeApp() { swipeAppBtn.text = "Auto-swipe app: ${s.swipeApp}" }
+        renderSwipeApp()
+        swipeAppBtn.setOnClickListener {
+            val vals = App.values(); s.swipeApp = vals[(s.swipeApp.ordinal + 1) % vals.size]; renderSwipeApp()
+        }
+        col.addView(swipeAppBtn)
+
         col.header("Chances optimization")
         col.check("Send personalized openers to new matches", s.autoOpenerEnabled) { s.autoOpenerEnabled = it }
         col.check("Learning loop (nudge tone toward what works)", s.banditEnabled) { s.banditEnabled = it }
