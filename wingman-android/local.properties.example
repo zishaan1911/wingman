@@ -1,3 +1,0 @@
-# Copy to local.properties (which is git-ignored) and fill in.
-# sdk.dir is set automatically by Android Studio.
-GROQ_API_KEY=gsk_your_groq_key_here
