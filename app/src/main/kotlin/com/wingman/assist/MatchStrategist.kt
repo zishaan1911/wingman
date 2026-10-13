@@ -47,10 +47,10 @@ class MatchStrategist(private val groq: GroqClient) {
         }
 
         val transcript = conversation.messages.joinToString("\n") { m ->
-            val who = if (m.sender == Sender.ME) persona.name else conversation.matchName
+            val who = if (m.sender == Sender.ME) "me" else "them"
             "$who: ${m.text}"
         }
-        val user = "Match: ${conversation.matchName}\nMessages exchanged: ${conversation.depth}\n\n$transcript"
+        val user = "Messages exchanged: ${conversation.depth}\n\n$transcript"
 
         return try {
             val raw = groq.complete(system, user, temperature = 0.2, maxTokens = 400)

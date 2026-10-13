@@ -346,6 +346,22 @@ class DatingAccessibilityService : AccessibilityService() {
 
     private fun cleanupSend(id: String) { scheduled.remove(id); dueSends.remove(id) }
 
+    /** All pending sends (timed + waiting-for-chat), soonest first — for the dev panel. */
+    fun scheduledItems(): List<ScheduledReply> {
+        val timed = scheduler.pending()
+        val ids = timed.map { it.conversationId }.toSet()
+        val queued = dueSends.values.filter { it.conversationId !in ids }
+        return (timed + queued).sortedBy { it.sendAt }
+    }
+
+    /** Cancel a pending send (from the dev panel). */
+    fun cancelScheduled(conversationId: String) {
+        scheduler.cancel(conversationId)
+        dueSends.remove(conversationId)
+        scheduled.remove(conversationId)
+        OverlayService.clearPending()
+    }
+
     // ---------------------------------------------------------------------------
     // SWIPING
     // ---------------------------------------------------------------------------

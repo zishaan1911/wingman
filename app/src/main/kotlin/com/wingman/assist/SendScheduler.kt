@@ -51,6 +51,11 @@ class SendScheduler(ctx: Context, private val onFire: (ScheduledReply) -> Unit) 
         sp.edit().clear().apply()
     }
 
+    /** Read-only list of persisted pending sends (for the dev panel), soonest first. */
+    fun pending(): List<ScheduledReply> = sp.all.values.mapNotNull { raw ->
+        (raw as? String)?.let { runCatching { fromJson(JSONObject(it)) }.getOrNull() }
+    }.sortedBy { it.sendAt }
+
     /** Reload persisted sends (call from onServiceConnected) and re-arm them. */
     fun loadPending(): List<ScheduledReply> {
         val out = ArrayList<ScheduledReply>()

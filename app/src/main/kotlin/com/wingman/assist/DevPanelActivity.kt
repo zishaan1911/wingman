@@ -139,6 +139,36 @@ class DevPanelActivity : Activity() {
         col.addView(stats)
         col.addView(Button(this).apply { text = "Refresh stats"; setOnClickListener { renderStats() } })
 
+        col.header("Scheduled messages (tap Cancel to stop one)")
+        val schedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        fun renderSched() {
+            schedBox.removeAllViews()
+            val svc = DatingAccessibilityService.instance
+            if (svc == null) {
+                schedBox.addView(TextView(this).apply { text = "(service not running — enable the accessibility service)" })
+                return
+            }
+            val items = svc.scheduledItems()
+            if (items.isEmpty()) { schedBox.addView(TextView(this).apply { text = "none pending" }); return }
+            for (item in items) {
+                val mins = ((item.sendAt.toEpochMilli() - System.currentTimeMillis()) / 60000).coerceAtLeast(0)
+                val tag = if (item.isOpener) "opener" else item.escalation.name.lowercase()
+                val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 8, 0, 8) }
+                row.addView(TextView(this).apply {
+                    text = "in ${mins}m [$tag]: ${item.text.take(70)}"
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                row.addView(Button(this).apply {
+                    text = "Cancel"
+                    setOnClickListener { svc.cancelScheduled(item.conversationId); renderSched() }
+                })
+                schedBox.addView(row)
+            }
+        }
+        renderSched()
+        col.addView(Button(this).apply { text = "Refresh scheduled"; setOnClickListener { renderSched() } })
+        col.addView(schedBox)
+
         col.header("Profile photos (open your profile first, then audit)")
         val auditOut = TextView(this).apply { setPadding(0, 8, 0, 8) }
         col.addView(Button(this).apply {
