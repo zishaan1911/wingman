@@ -61,10 +61,19 @@ object AutoUi {
         return best
     }
 
-    /** Parse the visible conversation: text bubbles between the header and the input, by side. */
+    /**
+     * Parse the visible conversation: text bubbles between the header and the input.
+     *
+     * Sender is decided by ALIGNMENT, not center: your (ME) bubbles hug the right edge,
+     * theirs (THEM) hug the left. Center-based classification breaks on wide bubbles (a long
+     * message's center sits near the middle on either side), which is why sent/received got
+     * mixed up. We compare the gap to each screen edge; only fall back to center when a bubble
+     * is near full-width (ambiguous).
+     */
     fun messages(root: AccessibilityNodeInfo, input: AccessibilityNodeInfo?): List<Message> {
         val screen = Rect().also { root.getBoundsInScreen(it) }
         val mid = screen.centerX()
+        val margin = (screen.width() * 0.07).toInt()
         val headerBottom = screen.top + (screen.height() * 0.12).toInt()
         val inputTop = input?.let { Rect().also { r -> it.getBoundsInScreen(r) }.top }
             ?: (screen.bottom - (screen.height() * 0.1).toInt())
@@ -75,8 +84,15 @@ object AutoUi {
             if (t.isEmpty() || n.isEditable) return@walk
             if (n.className?.contains("TextView") != true) return@walk
             val b = Rect().also { n.getBoundsInScreen(it) }
-            if (b.top < headerBottom || b.bottom > inputTop) return@walk   // skip header + input zones
-            val sender = if (b.centerX() < mid) Sender.THEM else Sender.ME
+            if (b.top < headerBottom || b.bottom > inputTop) return@walk          // skip header + input
+            if (b.width() > screen.width() * 0.95) return@walk                    // full-bleed = chrome, not a bubble
+            val leftGap = b.left - screen.left
+            val rightGap = screen.right - b.right
+            val sender = when {
+                rightGap + margin < leftGap -> Sender.ME        // hugs the right edge → mine
+                leftGap + margin < rightGap -> Sender.THEM       // hugs the left edge → theirs
+                else -> if (b.centerX() < mid) Sender.THEM else Sender.ME   // ambiguous fallback
+            }
             collected.add(b.top to Message(sender, t, Instant.now()))
         }
         return collected.sortedBy { it.first }.map { it.second }   // top-to-bottom = chronological

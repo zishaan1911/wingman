@@ -131,6 +131,12 @@ class DatingAccessibilityService : AccessibilityService() {
         // Count a new match the first time we see its thread.
         if (convoId !in seenConvos) { seenConvos.add(convoId); learning.noteMatch() }
 
+        // DEBUG: log how each visible message was classified (helps verify sent-vs-received).
+        if (messages.isNotEmpty()) {
+            Log.d(TAG, "parsed ${messages.size} msgs: " +
+                messages.joinToString(" | ") { "${it.sender}:${it.text.take(20)}" })
+        }
+
         val convo = store.ingest(convoId, profile.app, matchName, messages)
 
         // Credit an outcome: they replied to something we sent.
