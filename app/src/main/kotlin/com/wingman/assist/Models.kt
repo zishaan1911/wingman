@@ -61,12 +61,35 @@ data class MatchStrategy(
     val wantsOffApp: Boolean,
     /** One-line why, surfaced in the dev panel / overlay for auditing. */
     val rationale: String,
+    /** Durable facts about the match worth remembering for callbacks (from the same read). */
+    val facts: List<String> = emptyList(),
 ) {
     companion object {
         /** Safe default before we've analysed anyone. */
         val DEFAULT = MatchStrategy(Tone.GENUINE, Pace.MIRROR, 0.5, 0.0, false, "default")
     }
 }
+
+/** How a conversation's momentum is trending (interest + reply-latency growth). */
+enum class DecayState { WARM, COOLING, COLD }
+
+/** Outcome events we log to learn what works for YOU specifically. */
+enum class OutcomeKind { OPENER_SENT, REPLY_SENT, GOT_REPLY, PROPOSED_DATE, MOVED_OFF_APP }
+
+/** Funnel snapshot for the analytics screen. */
+data class FunnelStats(
+    val matches: Int,
+    val openersSent: Int,
+    val repliesReceived: Int,
+    val dateProposals: Int,
+    val offAppMoves: Int,
+) {
+    /** Reply rate to our openers — the top-of-funnel health metric. */
+    val openerReplyRate: Double get() = if (openersSent == 0) 0.0 else repliesReceived.toDouble() / openersSent
+}
+
+/** One photo's audit result. */
+data class PhotoNote(val index: Int, val score: Double, val note: String)
 
 /** A single chat message as parsed off the screen. */
 data class Message(
@@ -122,4 +145,8 @@ data class ScheduledReply(
     val sendAt: Instant,
     val escalation: EscalationAction = EscalationAction.NONE,
     val needsApproval: Boolean = false,
+    /** Tone used — tagged so the learning loop can credit/blame it on the outcome. */
+    val tone: Tone = Tone.GENUINE,
+    /** True if this is the first message (an opener) rather than a reply. */
+    val isOpener: Boolean = false,
 )

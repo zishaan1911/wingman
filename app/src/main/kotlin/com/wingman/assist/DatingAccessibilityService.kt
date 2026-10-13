@@ -15,14 +15,16 @@ import java.time.Instant
 import java.util.concurrent.Executors
 
 /**
- * The bridge between the dating apps and the brains (engines).
+ * Bridge between the dating apps and the brains.
  *
- * Per incoming message, on a chat screen:
- *   parse → ingest → MatchStrategist (per-match tone/pace/interest/readiness)
- *   → EscalationPolicy (ask out? move off-app?) → ReplyEngine (draft)
- *   → TimingEngine (when) → autonomy gate (auto-send vs approve) → schedule/send.
- *
- * Swiping is driven via swipeOnce() by an external pacer loop.
+ * New-match (0 messages)      → OpenerEngine (vision reads their profile) → schedule opener.
+ * Our turn in a thread        → MatchStrategist (tone/pace/interest/readiness/facts)
+ *                               → MatchMemory (callbacks) → DecayDetector (cooling?)
+ *                               → EscalationPolicy → ReplyEngine → TimingEngine
+ *                               → LearningStore bandit (nudge tone) → autonomy gate → send.
+ * Their reply arrives          → LearningStore records the outcome (credits the tone used).
+ * Swiping                      → swipeOnce() driven by an external pacer.
+ * Profile audit                → requestPhotoAudit() (triggered from the UI).
  */
 class DatingAccessibilityService : AccessibilityService() {
 
@@ -30,19 +32,31 @@ class DatingAccessibilityService : AccessibilityService() {
     private val work = Executors.newSingleThreadExecutor()
 
     private lateinit var settings: Settings
+    private lateinit var learning: LearningStore
+    private lateinit var memory: MatchMemory
+    private val decay = DecayDetector()
+
     private val groq by lazy { GroqClient(BuildConfigKey.GROQ_API_KEY) }
     private val replyEngine by lazy { ReplyEngine(groq) }
+    private val openerEngine by lazy { OpenerEngine(groq) }
     private val swipeEngine by lazy { SwipeEngine(groq) }
     private val strategist by lazy { MatchStrategist(groq) }
+    private val photoAuditor by lazy { PhotoAuditor(groq) }
     private val timing = TimingEngine()
     private lateinit var escalation: EscalationPolicy
     private lateinit var scheduler: SendScheduler
 
     private val scheduled = HashSet<String>()
+    private val seenConvos = HashSet<String>()
+    /** convoId -> (tone used, was it an opener) — to credit the outcome when they reply. */
+    private val awaitingReply = HashMap<String, Pair<Tone, Boolean>>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         settings = Settings(this)
+        learning = LearningStore(this)
+        memory = MatchMemory(this)
         escalation = EscalationPolicy(settings)
         scheduler = SendScheduler { reply -> performScheduledSend(reply) }
         OverlayService.start(this)
@@ -50,6 +64,7 @@ class DatingAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {}
+    override fun onDestroy() { instance = null; super.onDestroy() }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
@@ -61,73 +76,124 @@ class DatingAccessibilityService : AccessibilityService() {
     }
 
     // ---------------------------------------------------------------------------
-    // CHAT READING + ADAPTIVE REPLY PIPELINE
+    // CHAT PIPELINE
     // ---------------------------------------------------------------------------
 
     private fun handleChatScreen(root: AccessibilityNodeInfo, profile: AppProfile) {
-        if (findInputBox(root, profile) == null) return   // not a chat screen
+        if (findInputBox(root, profile) == null) return
         if (!settings.autoReplyEnabled) return
 
-        val matchName = profile.matchNameId
-            ?.let { findById(root, it)?.text?.toString() } ?: "match"
-        val messages = parseConversation(root, profile)
-        if (messages.isEmpty()) return
-
+        val matchName = profile.matchNameId?.let { findById(root, it)?.text?.toString() } ?: "match"
         val convoId = "${profile.app}:$matchName"
+        val messages = parseConversation(root, profile)
+
+        // Count a new match the first time we see its thread.
+        if (convoId !in seenConvos) { seenConvos.add(convoId); learning.noteMatch() }
+
         val convo = store.ingest(convoId, profile.app, matchName, messages)
-        if (!convo.isOurTurn || convoId in scheduled) return
 
+        // Credit an outcome: they replied to something we sent.
+        if (convo.isOurTurn) awaitingReply.remove(convoId)?.let { (tone, wasOpener) ->
+            learning.record(OutcomeKind.GOT_REPLY, tone)
+            if (wasOpener) learning.recordOpenerReply()
+        }
+
+        if (convoId in scheduled) return
+
+        // New match, no messages yet → send a personalized opener.
+        if (convo.depth == 0) {
+            if (settings.autoOpenerEnabled) { scheduled.add(convoId); scheduleOpener(convoId, matchName, profile) }
+            return
+        }
+
+        if (!convo.isOurTurn) return
         scheduled.add(convoId)
-        work.submit {
-            try {
-                // 1. read this match
-                val strategy = strategist.analyze(convo, settings.persona()).let { s ->
-                    // dev-panel overrides win if set
-                    s.copy(
-                        tone = settings.forceTone ?: s.tone,
-                        pace = settings.forcePace ?: s.pace,
-                    )
-                }
-                convo.strategy = strategy
+        work.submit { runReplyPipeline(convo, convoId, matchName) }
+    }
 
-                // 2. decide any big move
-                val move = escalation.decide(convo, strategy)
+    private fun runReplyPipeline(convo: Conversation, convoId: String, matchName: String) {
+        try {
+            val persona = settings.persona()
 
-                // 3. draft in the right tone, with the move woven in
-                val text = replyEngine.draft(convo, settings.persona(), strategy, move)
+            // 1. read this match (tone/pace/interest/readiness/facts)
+            val read = strategist.analyze(convo, persona)
+            val strategy = read.copy(
+                tone = settings.forceTone ?: read.tone,   // dev-panel overrides win
+                pace = settings.forcePace ?: read.pace,
+            )
+            convo.strategy = strategy
 
-                // 4. when to send (per-match pace)
-                val sendAt = timing.computeSendTime(convo, settings.persona(), strategy.pace)
+            // 2. remember new facts for future callbacks
+            memory.merge(convoId, strategy.facts)
 
-                // 5. autonomy gate
-                val needsApproval = when (settings.autonomy) {
-                    AutonomyMode.SUPERVISED -> true
-                    AutonomyMode.APPROVE_BIG_MOVES -> escalation.isBigMove(move)
-                    AutonomyMode.FULL_AUTO -> false
-                }
-                val reply = ScheduledReply(convoId, matchName, text, sendAt, move, needsApproval)
-
-                if (needsApproval) {
-                    OverlayService.requestApproval(
-                        reply,
-                        onApprove = { scheduler.schedule(it); OverlayService.showPending(it.matchName, it.text, it.sendAt) },
-                        onReject = { scheduled.remove(it.conversationId) },
-                    )
-                } else {
-                    scheduler.schedule(reply)
-                    OverlayService.showPending(matchName, text, sendAt)
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "reply pipeline failed", e)
-                scheduled.remove(convoId)
+            // 3. cooling off? optionally disengage
+            val state = decay.assess(convo, strategy)
+            if (state == DecayState.COLD && settings.disengageWhenCold) {
+                OverlayService.showSwipe(SwipeDecision(false, 1.0, "$matchName: cold, disengaged"))
+                scheduled.remove(convoId); return
             }
+
+            // 4. learning loop may nudge the tone toward what's earning you replies
+            val tone = if (settings.banditEnabled) learning.chooseTone(strategy.tone) else strategy.tone
+            val effStrategy = strategy.copy(tone = tone)
+
+            // 5. big move?
+            val move = escalation.decide(convo, effStrategy)
+
+            // 6. draft, with memory callbacks woven in
+            val text = replyEngine.draft(convo, persona, effStrategy, move, memory.facts(convoId))
+
+            // 7. when
+            val sendAt = timing.computeSendTime(convo, persona, effStrategy.pace)
+
+            // 8. autonomy gate
+            val needsApproval = when (settings.autonomy) {
+                AutonomyMode.SUPERVISED -> true
+                AutonomyMode.APPROVE_BIG_MOVES -> escalation.isBigMove(move)
+                AutonomyMode.FULL_AUTO -> false
+            }
+            val reply = ScheduledReply(convoId, matchName, text, sendAt, move, needsApproval, tone, isOpener = false)
+            dispatch(reply)
+        } catch (e: Exception) {
+            Log.e(TAG, "reply pipeline failed", e); scheduled.remove(convoId)
+        }
+    }
+
+    private fun scheduleOpener(convoId: String, matchName: String, profile: AppProfile) {
+        captureScreenJpeg { shot ->
+            work.submit {
+                try {
+                    val persona = settings.persona()
+                    val text = if (shot != null) openerEngine.fromProfile(shot, matchName, persona)
+                    else openerEngine.fromNameOnly(matchName, persona)
+                    // No history yet: a prompt-but-not-instant opener, shifted into active hours.
+                    val convo = store.get(convoId) ?: Conversation(convoId, profile.app, matchName)
+                    val sendAt = timing.computeSendTime(convo, persona, Pace.WARM_PROMPT)
+                    val needsApproval = settings.autonomy == AutonomyMode.SUPERVISED
+                    val reply = ScheduledReply(convoId, matchName, text, sendAt, EscalationAction.NONE, needsApproval, Tone.GENUINE, isOpener = true)
+                    dispatch(reply)
+                } catch (e: Exception) { Log.e(TAG, "opener failed", e); scheduled.remove(convoId) }
+            }
+        }
+    }
+
+    /** Either schedule directly, or route through the overlay for your approval. */
+    private fun dispatch(reply: ScheduledReply) {
+        if (reply.needsApproval) {
+            OverlayService.requestApproval(
+                reply,
+                onApprove = { scheduler.schedule(it); OverlayService.showPending(it.matchName, it.text, it.sendAt) },
+                onReject = { scheduled.remove(it.conversationId) },
+            )
+        } else {
+            scheduler.schedule(reply)
+            OverlayService.showPending(reply.matchName, reply.text, reply.sendAt)
         }
     }
 
     private fun parseConversation(root: AccessibilityNodeInfo, profile: AppProfile): List<Message> {
         val out = ArrayList<Message>()
         val screenWidth = Rect().also { root.getBoundsInScreen(it) }.width().coerceAtLeast(1)
-
         fun visit(node: AccessibilityNodeInfo?) {
             node ?: return
             val id = node.viewIdResourceName
@@ -157,14 +223,11 @@ class DatingAccessibilityService : AccessibilityService() {
     // ---------------------------------------------------------------------------
 
     private fun performScheduledSend(reply: ScheduledReply) {
-        if (OverlayService.killSwitchEngaged || !settings.autoReplyEnabled) {
-            scheduled.remove(reply.conversationId); return
-        }
+        if (OverlayService.killSwitchEngaged || !settings.autoReplyEnabled) { scheduled.remove(reply.conversationId); return }
         val root = rootInActiveWindow
         val profile = root?.packageName?.toString()?.let { AppProfile.forPackage(it) }
         if (root == null || profile == null) {
-            Log.w(TAG, "send skipped: target app not in foreground")
-            scheduled.remove(reply.conversationId); return
+            Log.w(TAG, "send skipped: target app not in foreground"); scheduled.remove(reply.conversationId); return
         }
         val input = findInputBox(root, profile) ?: run { scheduled.remove(reply.conversationId); return }
 
@@ -172,14 +235,23 @@ class DatingAccessibilityService : AccessibilityService() {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, reply.text)
         }
         input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-
         val sendBtn = profile.sendButtonId?.let { findById(root, it) }
         if (sendBtn != null) sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK)
         else Log.w(TAG, "no send button id; set sendButtonId in AppProfile")
 
+        // record outcomes for the learning loop
+        if (reply.isOpener) learning.record(OutcomeKind.OPENER_SENT, reply.tone)
+        learning.record(OutcomeKind.REPLY_SENT, reply.tone)
+        when (reply.escalation) {
+            EscalationAction.PROPOSE_DATE -> learning.record(OutcomeKind.PROPOSED_DATE, reply.tone)
+            EscalationAction.MOVE_OFF_APP -> learning.record(OutcomeKind.MOVED_OFF_APP, reply.tone)
+            EscalationAction.NONE -> {}
+        }
+        awaitingReply[reply.conversationId] = reply.tone to reply.isOpener
+
         OverlayService.clearPending()
         scheduled.remove(reply.conversationId)
-        Log.i(TAG, "sent to ${reply.conversationId} [${reply.escalation}]")
+        Log.i(TAG, "sent to ${reply.conversationId} tone=${reply.tone} [${reply.escalation}]")
     }
 
     // ---------------------------------------------------------------------------
@@ -197,6 +269,18 @@ class DatingAccessibilityService : AccessibilityService() {
                     OverlayService.showSwipe(decision)
                     onDone(decision)
                 } catch (e: Exception) { Log.e(TAG, "swipe eval failed", e); onDone(null) }
+            }
+        }
+    }
+
+    /** Audit the profile photos currently on screen (triggered from the UI). */
+    fun requestPhotoAudit(onResult: (PhotoAuditor.Audit) -> Unit) {
+        captureScreenJpeg { shot ->
+            if (shot == null) { onResult(PhotoAuditor.Audit(emptyList(), emptyList(), "no screenshot")); return@captureScreenJpeg }
+            work.submit {
+                val a = runCatching { photoAuditor.audit(listOf(shot), settings.swipeCriteria) }
+                    .getOrElse { PhotoAuditor.Audit(emptyList(), emptyList(), "audit failed: ${it.message}") }
+                onResult(a)
             }
         }
     }
@@ -254,7 +338,6 @@ class DatingAccessibilityService : AccessibilityService() {
         return found
     }
 
-    /** DEBUG: dump the live node tree to Logcat to discover resource IDs. */
     fun dumpNodeTree() {
         val root = rootInActiveWindow ?: return
         fun visit(n: AccessibilityNodeInfo?, depth: Int) {
@@ -265,7 +348,12 @@ class DatingAccessibilityService : AccessibilityService() {
         visit(root, 0)
     }
 
-    companion object { private const val TAG = "Wingman" }
+    companion object {
+        private const val TAG = "Wingman"
+        /** So the UI can trigger a photo audit / check whether the service is running. */
+        @Volatile var instance: DatingAccessibilityService? = null
+            private set
+    }
 }
 
 /** build.gradle.kts injects GROQ_API_KEY (from local.properties) into BuildConfig. */

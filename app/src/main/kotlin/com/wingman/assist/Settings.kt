@@ -43,6 +43,21 @@ class Settings(ctx: Context) {
         get() = sp.getFloat("readiness", 0.65f).toDouble()
         set(v) = sp.edit().putFloat("readiness", v.toFloat()).apply()
 
+    /** Send personalized openers to brand-new matches (0-message threads). */
+    var autoOpenerEnabled: Boolean
+        get() = sp.getBoolean("autoOpener", true)
+        set(v) = sp.edit().putBoolean("autoOpener", v).apply()
+
+    /** Stop auto-replying to threads the decay detector rates COLD (saves effort). */
+    var disengageWhenCold: Boolean
+        get() = sp.getBoolean("disengageCold", false)
+        set(v) = sp.edit().putBoolean("disengageCold", v).apply()
+
+    /** Let the learning loop nudge tone toward what's getting you replies. */
+    var banditEnabled: Boolean
+        get() = sp.getBoolean("bandit", true)
+        set(v) = sp.edit().putBoolean("bandit", v).apply()
+
     // --- strategy override: when non-null, forces tone/pace instead of the strategist ---
     var forceTone: Tone?
         get() = sp.getString("forceTone", null)?.let { runCatching { Tone.valueOf(it) }.getOrNull() }

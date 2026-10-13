@@ -81,6 +81,55 @@ class DevPanelActivity : Activity() {
         val sSel = col.field("Selectivity (0 picky – 1 liberal)", s.swipeSelectivity.toString(), number = true)
         val sCap = col.field("Daily swipe cap", s.dailySwipeCap.toString(), number = true)
 
+        col.header("Chances optimization")
+        col.check("Send personalized openers to new matches", s.autoOpenerEnabled) { s.autoOpenerEnabled = it }
+        col.check("Learning loop (nudge tone toward what works)", s.banditEnabled) { s.banditEnabled = it }
+        col.check("Disengage from cold threads", s.disengageWhenCold) { s.disengageWhenCold = it }
+
+        col.header("Analytics")
+        val learn = LearningStore(this)
+        val stats = TextView(this).apply { setPadding(0, 8, 0, 8) }
+        fun renderStats() {
+            val f = learn.funnel()
+            stats.text = buildString {
+                appendLine("Matches seen:    ${f.matches}")
+                appendLine("Openers sent:    ${f.openersSent}")
+                appendLine("Opener replies:  ${f.repliesReceived}  (${(f.openerReplyRate * 100).toInt()}%)")
+                appendLine("Date proposals:  ${f.dateProposals}")
+                appendLine("Off-app moves:   ${f.offAppMoves}")
+                appendLine()
+                appendLine("Reply rate by tone:")
+                append(learn.toneReport())
+            }
+        }
+        renderStats()
+        col.addView(stats)
+        col.addView(Button(this).apply { text = "Refresh stats"; setOnClickListener { renderStats() } })
+
+        col.header("Profile photos (open your profile first, then audit)")
+        val auditOut = TextView(this).apply { setPadding(0, 8, 0, 8) }
+        col.addView(Button(this).apply {
+            text = "Audit photos on screen"
+            setOnClickListener {
+                val svc = DatingAccessibilityService.instance
+                if (svc == null) {
+                    Toast.makeText(this@DevPanelActivity, "Enable the accessibility service first", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this@DevPanelActivity, "Capturing & auditing…", Toast.LENGTH_SHORT).show()
+                    svc.requestPhotoAudit { a ->
+                        runOnUiThread {
+                            auditOut.text = buildString {
+                                appendLine(a.summary)
+                                a.notes.forEach { appendLine("#${it.index}  ${(it.score * 100).toInt()}%  ${it.note}") }
+                                if (a.bestOrder.isNotEmpty()) append("Suggested order: ${a.bestOrder.joinToString(", ")}")
+                            }
+                        }
+                    }
+                }
+            }
+        })
+        col.addView(auditOut)
+
         col.addView(Button(this).apply {
             text = "SAVE"
             setOnClickListener {

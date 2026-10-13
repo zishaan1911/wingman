@@ -137,3 +137,28 @@ Model IDs drift on Groq's side — verify the current IDs in the Groq console an
 update the two constants in `GroqClient.kt` if needed. The client talks to Groq's
 OpenAI-compatible Chat Completions endpoint, so swapping models or even providers
 later is a one-line change.
+
+## Optimizing your chances
+
+Beyond timing + tone, the app works the whole funnel:
+
+- **Personalized openers** (`OpenerEngine.kt`) — for a brand-new match (0 messages),
+  the vision model reads their profile screenshot and writes a specific,
+  reference-something first message instead of "hey". Biggest single lift to reply rate.
+- **Learning loop + analytics** (`LearningStore.kt`) — logs outcomes (opener sent,
+  reply sent, got a reply, date proposed, moved off-app), tracks **reply rate per tone**,
+  and runs an epsilon-greedy bandit that nudges the tone toward what's actually earning
+  *you* replies. The dev panel shows your funnel (matches → openers → replies → dates)
+  so you can see where you're leaking.
+- **Match memory** (`MatchMemory.kt`) — remembers durable facts each person mentioned
+  (extracted by the strategist in the same read, no extra call) and feeds them back for
+  natural callbacks ("how'd that exam go?"). One of the strongest rapport signals.
+- **Decay detection** (`DecayDetector.kt`) — spots cooling threads (interest drop +
+  slower/shorter replies) so you can disengage and refocus effort on live ones.
+- **Photo auditor** (`PhotoAuditor.kt`) — open your profile, tap *Audit photos on screen*
+  in the dev panel; the vision model scores each photo, suggests an order, and flags weak
+  ones. Lead-photo A/B testing runs through the funnel: set a variant, let it run, compare
+  match rate (photo reordering itself is a manual step — reliable auto-reorder isn't
+  feasible via accessibility).
+
+All of these are toggleable in the dev panel.

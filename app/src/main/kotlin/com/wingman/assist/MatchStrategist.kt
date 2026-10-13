@@ -34,9 +34,11 @@ class MatchStrategist(private val groq: GroqClient) {
             appendLine("- interest: 0..1, how into the conversation THEY seem.")
             appendLine("- readiness: 0..1, how ripe the moment is to suggest meeting up.")
             appendLine("- wantsOffApp: true if they hinted at texting / another app / a call.")
+            appendLine("- facts: array of short durable facts worth remembering about THEM for later callbacks")
+            appendLine("    (job, pet, trip, exam, hobby, plans). Only things they actually stated. [] if none.")
             appendLine()
             appendLine("Respond with ONLY this JSON, no markdown:")
-            appendLine("""{"tone":"GENUINE","pace":"MIRROR","interest":0.0,"readiness":0.0,"wantsOffApp":false,"rationale":"short"}""")
+            appendLine("""{"tone":"GENUINE","pace":"MIRROR","interest":0.0,"readiness":0.0,"wantsOffApp":false,"rationale":"short","facts":["..."]}""")
         }
 
         val transcript = conversation.messages.joinToString("\n") { m ->
@@ -58,6 +60,9 @@ class MatchStrategist(private val groq: GroqClient) {
         val body = raw.substringAfter('{', "").let { if (it.isEmpty()) raw else "{$it" }
             .let { val i = it.lastIndexOf('}'); if (i >= 0) it.substring(0, i + 1) else raw }
         val o = JSONObject(body)
+        val facts = o.optJSONArray("facts")?.let { arr ->
+            (0 until arr.length()).mapNotNull { arr.optString(it, null)?.trim()?.takeIf { s -> s.isNotEmpty() } }
+        } ?: emptyList()
         return MatchStrategy(
             tone = runCatching { Tone.valueOf(o.optString("tone", "GENUINE").uppercase()) }.getOrDefault(Tone.GENUINE),
             pace = runCatching { Pace.valueOf(o.optString("pace", "MIRROR").uppercase()) }.getOrDefault(Pace.MIRROR),
@@ -65,6 +70,7 @@ class MatchStrategist(private val groq: GroqClient) {
             readiness = o.optDouble("readiness", 0.0).coerceIn(0.0, 1.0),
             wantsOffApp = o.optBoolean("wantsOffApp", false),
             rationale = o.optString("rationale", "").trim(),
+            facts = facts,
         )
     }
 }

@@ -8,6 +8,7 @@ class ReplyEngine(private val groq: GroqClient) {
         persona: Persona,
         strategy: MatchStrategy,
         escalation: EscalationAction,
+        memory: List<String> = emptyList(),
     ): String {
         val system = buildString {
             appendLine("You are drafting a dating-app reply AS the user, not as an assistant.")
@@ -22,6 +23,11 @@ class ReplyEngine(private val groq: GroqClient) {
             appendLine("THIS MATCH — adapt to them:")
             appendLine(toneGuidance(strategy.tone))
             appendLine("(strategist note: ${strategy.rationale})")
+            if (memory.isNotEmpty()) {
+                appendLine()
+                appendLine("THINGS THEY'VE TOLD YOU (use a natural callback when it fits — don't list them):")
+                memory.forEach { appendLine("- $it") }
+            }
             appendLine()
             appendLine("STYLE RULES:")
             appendLine("- Sound like a real person texting: casual, specific, a little playful.")
